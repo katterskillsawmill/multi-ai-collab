@@ -1,0 +1,303 @@
+name: Multi-AI Code Review Pipeline
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+  XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+
+jobs:
+  # Step 1: Get PR diff and files
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      diff: ${{ steps.diff.outputs.diff }}
+      files: ${{ steps.files.outputs.files }}
+      pr_number: ${{ steps.pr.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR number
+        id: pr
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "number=${{ inputs.pr_number }}" >> $GITHUB_OUTPUT
+          else
+            echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get PR diff
+        id: diff
+        run: |
+          gh pr diff ${{ steps.pr.outputs.number }} > diff.txt
+          # Truncate if too large (API limits)
+          head -c 100000 diff.txt > truncated_diff.txt
+          echo "diff<<EOF" >> $GITHUB_OUTPUT
+          cat truncated_diff.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get changed files
+        id: files
+        run: |
+          gh pr view ${{ steps.pr.outputs.number }} --json files -q '.files[].path' > files.txt
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          cat files.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Step 2: Run AI reviews in parallel
+  claude-review:
+    needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      review: ${{ steps.review.outputs.result }}
+    steps:
+      - name: Claude Architecture Review
+        id: review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const response = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': process.env.ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01'
+              },
+              body: JSON.stringify({
+                model: 'claude-sonnet-4-20250514',
+                max_tokens: 2000,
+                messages: [{
+                  role: 'user',
+                  content: `You are an expert code architect. Review this PR diff for:
+                  1. Architectural concerns and design patterns
+                  2. Scalability issues
+                  3. Security vulnerabilities
+                  4. Performance implications
+
+                  Be concise. Format as markdown with severity levels (🔴 Critical, 🟡 Warning, 🟢 Suggestion).
+
+                  Files changed:
+                  ${{ needs.prepare.outputs.files }}
+
+                  Diff:
+                  ${{ needs.prepare.outputs.diff }}`
+                }]
+              })
+            });
+            const data = await response.json();
+            const result = data.content[0].text;
+            core.setOutput('result', result);
+
+  codex-review:
+    needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      review: ${{ steps.review.outputs.result }}
+    steps:
+      - name: Codex Code Quality Review
+        id: review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+              },
+              body: JSON.stringify({
+                model: 'gpt-4-turbo-preview',
+                max_tokens: 2000,
+                messages: [{
+                  role: 'system',
+                  content: 'You are an expert code reviewer focusing on code quality, best practices, and maintainability.'
+                }, {
+                  role: 'user',
+                  content: `Review this PR diff for:
+                  1. Code style and consistency
+                  2. Best practices violations
+                  3. Potential bugs and edge cases
+                  4. Test coverage gaps
+
+                  Be concise. Format as markdown with severity levels (🔴 Critical, 🟡 Warning, 🟢 Suggestion).
+
+                  Files changed:
+                  ${{ needs.prepare.outputs.files }}
+
+                  Diff:
+                  ${{ needs.prepare.outputs.diff }}`
+                }]
+              })
+            });
+            const data = await response.json();
+            const result = data.choices[0].message.content;
+            core.setOutput('result', result);
+
+  gemini-review:
+    needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      review: ${{ steps.review.outputs.result }}
+    steps:
+      - name: Gemini Documentation & Security Review
+        id: review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=' + process.env.GOOGLE_API_KEY, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                contents: [{
+                  parts: [{
+                    text: `You are an expert code reviewer focusing on documentation and security. Review this PR diff for:
+                    1. Missing or unclear documentation
+                    2. Security vulnerabilities (OWASP Top 10)
+                    3. Input validation issues
+                    4. Sensitive data exposure risks
+
+                    Be concise. Format as markdown with severity levels (🔴 Critical, 🟡 Warning, 🟢 Suggestion).
+
+                    Files changed:
+                    ${{ needs.prepare.outputs.files }}
+
+                    Diff:
+                    ${{ needs.prepare.outputs.diff }}`
+                  }]
+                }],
+                generationConfig: {
+                  maxOutputTokens: 2000
+                }
+              })
+            });
+            const data = await response.json();
+            const result = data.candidates[0].content.parts[0].text;
+            core.setOutput('result', result);
+
+  grok-review:
+    needs: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      review: ${{ steps.review.outputs.result }}
+    steps:
+      - name: Grok Edge Cases & Creative Review
+        id: review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const response = await fetch('https://api.x.ai/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${process.env.XAI_API_KEY}`
+              },
+              body: JSON.stringify({
+                model: 'grok-beta',
+                max_tokens: 2000,
+                messages: [{
+                  role: 'system',
+                  content: 'You are Grok, an AI that thinks outside the box. Look for unconventional issues others might miss.'
+                }, {
+                  role: 'user',
+                  content: `Review this PR diff for:
+                  1. Edge cases and corner cases
+                  2. Unconventional attack vectors
+                  3. Race conditions and timing issues
+                  4. Creative improvements and optimizations
+
+                  Be concise but insightful. Format as markdown with severity levels (🔴 Critical, 🟡 Warning, 🟢 Suggestion).
+
+                  Files changed:
+                  ${{ needs.prepare.outputs.files }}
+
+                  Diff:
+                  ${{ needs.prepare.outputs.diff }}`
+                }]
+              })
+            });
+            const data = await response.json();
+            const result = data.choices[0].message.content;
+            core.setOutput('result', result);
+
+  # Step 3: Consolidate and post review
+  consolidate:
+    needs: [prepare, claude-review, codex-review, gemini-review, grok-review]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post consolidated review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const claudeReview = `${{ needs.claude-review.outputs.review }}`;
+            const codexReview = `${{ needs.codex-review.outputs.review }}`;
+            const geminiReview = `${{ needs.gemini-review.outputs.review }}`;
+            const grokReview = `${{ needs.grok-review.outputs.review }}`;
+
+            const body = `# 🤖 Multi-AI Code Review
+
+            This PR has been reviewed by 4 AI models, each with a different focus area.
+
+            ---
+
+            ## 🧠 Claude (Architecture & Design)
+            ${claudeReview || '_No response_'}
+
+            ---
+
+            ## 💻 Codex/GPT-4 (Code Quality & Best Practices)
+            ${codexReview || '_No response_'}
+
+            ---
+
+            ## 🔒 Gemini (Documentation & Security)
+            ${geminiReview || '_No response_'}
+
+            ---
+
+            ## 🚀 Grok (Edge Cases & Creative Insights)
+            ${grokReview || '_No response_'}
+
+            ---
+
+            <details>
+            <summary>ℹ️ About this review</summary>
+
+            This automated review uses multiple AI models to provide comprehensive feedback:
+            - **Claude**: Focuses on architecture, scalability, and system design
+            - **Codex/GPT-4**: Focuses on code quality, best practices, and testing
+            - **Gemini**: Focuses on documentation and security vulnerabilities
+            - **Grok**: Focuses on edge cases and unconventional issues
+
+            Each model brings a unique perspective. Consider all feedback but use your judgment.
+            </details>
+            `;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ needs.prepare.outputs.pr_number }},
+              body: body
+            });
