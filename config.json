@@ -1,5 +1,5 @@
 {
-  "version": "2.0.0",
+  "version": "3.0.0",
   "models": {
     "claude": {
       "name": "claude-sonnet-4-20250514",
@@ -7,23 +7,32 @@
       "maxTokens": 2000,
       "role": "architecture",
       "focus": ["architecture", "scalability", "system design", "data flow"],
-      "icon": "🧠"
+      "icon": "C",
+      "strengths": {"architecture": 0.95, "code-gen": 0.85, "security": 0.7},
+      "avgLatencyMs": 3000,
+      "reliability": 0.95
     },
-    "gpt4": {
-      "name": "gpt-4o",
+    "codex": {
+      "name": "gpt-5.2-codex",
       "provider": "openai",
       "maxTokens": 2000,
       "role": "quality",
       "focus": ["code quality", "best practices", "testing", "maintainability"],
-      "icon": "💻"
+      "icon": "X",
+      "strengths": {"code-gen": 0.95, "debugging": 0.9, "testing": 0.85},
+      "avgLatencyMs": 2500,
+      "reliability": 0.92
     },
     "gemini": {
-      "name": "gemini-1.5-pro",
+      "name": "gemini-2.5-pro",
       "provider": "google",
       "maxTokens": 2000,
       "role": "security",
       "focus": ["security", "OWASP", "input validation", "documentation"],
-      "icon": "🔒"
+      "icon": "G",
+      "strengths": {"security": 0.95, "docs": 0.85, "vulnerability": 0.9},
+      "avgLatencyMs": 2000,
+      "reliability": 0.88
     },
     "grok": {
       "name": "grok-2-latest",
@@ -31,62 +40,131 @@
       "maxTokens": 2000,
       "role": "edge-cases",
       "focus": ["edge cases", "race conditions", "creative issues", "stress testing"],
-      "icon": "🚀"
+      "icon": "K",
+      "strengths": {"edge-cases": 0.9, "creative": 0.85, "debugging": 0.8},
+      "avgLatencyMs": 2800,
+      "reliability": 0.85
     }
   },
   "routing": {
     "security": {
-      "patterns": ["auth", "crypto", "secrets", "password", "token", "session", "login"],
+      "patterns": ["auth", "crypto", "secrets", "password", "token", "session", "login", "security"],
       "primaryAI": "gemini",
-      "secondaryAI": "grok"
+      "secondaryAI": "codex",
+      "riskLevel": "high"
     },
     "architecture": {
-      "patterns": ["infra", "architecture", "config", "setup", "docker", "k8s"],
+      "patterns": ["infra", "architecture", "config", "setup", "docker", "k8s", "core"],
       "primaryAI": "claude",
-      "secondaryAI": "gpt4"
+      "secondaryAI": "codex",
+      "riskLevel": "medium"
     },
     "testing": {
       "patterns": ["test", "spec", "mock", "__tests__"],
-      "primaryAI": "gpt4",
-      "secondaryAI": "grok"
+      "primaryAI": "codex",
+      "secondaryAI": "grok",
+      "riskLevel": "low"
     },
     "ui": {
       "patterns": ["component", "screen", "widget", "view", "ui", "styles"],
-      "primaryAI": "gpt4",
-      "secondaryAI": "claude"
+      "primaryAI": "codex",
+      "secondaryAI": "claude",
+      "riskLevel": "low"
     },
     "data": {
       "patterns": ["model", "schema", "migration", "database", "supabase"],
       "primaryAI": "claude",
-      "secondaryAI": "gemini"
+      "secondaryAI": "gemini",
+      "riskLevel": "medium"
+    }
+  },
+  "orchestration": {
+    "confidence": {
+      "thresholds": {
+        "high-risk": 0.98,
+        "medium-risk": 0.95,
+        "low-risk": 0.90
+      },
+      "earlyCutoff": {
+        "enabled": true,
+        "minAgreement": 2,
+        "requireHighPrecisionModel": true
+      },
+      "scoring": {
+        "agreementWeight": 0.5,
+        "calibratedConfWeight": 0.3,
+        "consistencyWeight": 0.2
+      }
+    },
+    "conflictResolution": {
+      "safetyCriticalPatterns": ["auth", "crypto", "secrets", "password", "injection", "xss", "csrf"],
+      "evidenceRequired": ["file", "line", "cwe", "exploitPath"],
+      "tieBreaker": "block-and-escalate",
+      "autoVerification": ["sast", "lint", "test"]
+    },
+    "timeouts": {
+      "perModelMs": 30000,
+      "globalMs": 60000,
+      "retryAttempts": 2,
+      "backoffMultiplier": 1.5
     }
   },
   "findings": {
-    "severities": {
-      "critical": {"emoji": "🔴", "label": "CRITICAL", "blocks": true},
-      "warning": {"emoji": "🟡", "label": "WARNING", "blocks": false},
-      "suggestion": {"emoji": "🟢", "label": "SUGGESTION", "blocks": false},
-      "info": {"emoji": "ℹ️", "label": "INFO", "blocks": false}
-    },
     "schema": {
-      "required": ["severity", "area", "finding", "recommendation"],
-      "optional": ["file", "line", "id"]
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "required": ["findingId", "sourceAI", "timestamp", "severity", "summary"],
+      "properties": {
+        "findingId": {"type": "string", "format": "uuid"},
+        "requestId": {"type": "string"},
+        "sourceAI": {"type": "string", "enum": ["claude", "codex", "gemini", "grok"]},
+        "timestamp": {"type": "string", "format": "date-time"},
+        "severity": {"type": "string", "enum": ["critical", "warning", "suggestion", "info"]},
+        "confidenceScore": {"type": "number", "minimum": 0, "maximum": 1},
+        "summary": {"type": "string"},
+        "area": {"type": "string"},
+        "file": {"type": "string"},
+        "line": {"type": "integer"},
+        "cwe": {"type": "string"},
+        "recommendation": {"type": "string"},
+        "evidence": {
+          "type": "object",
+          "properties": {
+            "codeSnippet": {"type": "string"},
+            "exploitPath": {"type": "string"},
+            "references": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "severities": {
+      "critical": {"emoji": "X", "label": "CRITICAL", "blocks": true, "requiresEvidence": true},
+      "warning": {"emoji": "!", "label": "WARNING", "blocks": false, "requiresEvidence": false},
+      "suggestion": {"emoji": "+", "label": "SUGGESTION", "blocks": false, "requiresEvidence": false},
+      "info": {"emoji": "i", "label": "INFO", "blocks": false, "requiresEvidence": false}
     }
   },
-  "presets": {
-    "categories": {
-      "review": ["review", "quick", "collab"],
-      "architecture": ["arch", "design"],
-      "security": ["security", "secrets", "threat"],
-      "testing": ["test", "testcases", "testplan"],
-      "documentation": ["docs", "readme"],
-      "refactoring": ["refactor", "simplify", "dry"],
-      "debugging": ["debug", "trace"],
-      "explanation": ["explain", "eli5"],
-      "edge-cases": ["edge", "break", "regression"],
-      "performance": ["perf"],
-      "git": ["commit", "pr"],
-      "risk": ["risk", "compat"]
+  "performance": {
+    "tracking": {
+      "enabled": true,
+      "logFile": "ai_performance_log.json",
+      "metrics": ["runs", "successes", "failures", "latencyMs", "qualityScore"]
+    },
+    "routing": {
+      "algorithm": "weighted-score",
+      "formula": "task_fit * 0.5 + tool_fit * 0.2 + reliability * 0.2 + cost_efficiency * 0.1",
+      "adaptiveWeights": true,
+      "recalibrationInterval": "weekly"
     }
+  },
+  "taskTypes": {
+    "code-gen": {"description": "Code generation", "defaultAI": "codex"},
+    "debugging": {"description": "Bug fixing and debugging", "defaultAI": "codex"},
+    "refactor": {"description": "Code refactoring", "defaultAI": "claude"},
+    "security": {"description": "Security review", "defaultAI": "gemini"},
+    "docs": {"description": "Documentation", "defaultAI": "gemini"},
+    "testing": {"description": "Test generation", "defaultAI": "codex"},
+    "edge-cases": {"description": "Edge case analysis", "defaultAI": "grok"},
+    "architecture": {"description": "Architecture review", "defaultAI": "claude"}
   }
 }

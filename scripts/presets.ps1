@@ -237,7 +237,7 @@ Use: CRITICAL (must fix), WARNING (should fix), SUGGESTION (nice to have), INFO 
 }
 
 function Show-Presets {
-    Write-Host "`n📋 Available Presets" -ForegroundColor Cyan
+    Write-Host "`nAvailable Presets" -ForegroundColor Cyan
     Write-Host ("=" * 50) -ForegroundColor DarkGray
 
     $categories = @{
@@ -263,11 +263,11 @@ function Show-Presets {
             if ($Presets.ContainsKey($key)) {
                 $p = $Presets[$key]
                 $aiIcon = switch ($p.ai) {
-                    "claude" { "🧠" }
-                    "gpt4" { "💻" }
-                    "gemini" { "🔒" }
-                    "grok" { "🚀" }
-                    "all" { "🤖" }
+                    "claude" { "[C]" }
+                    "gpt4" { "[G]" }
+                    "gemini" { "[S]" }
+                    "grok" { "[X]" }
+                    "all" { "[*]" }
                 }
                 Write-Host "  $aiIcon " -NoNewline
                 Write-Host $key.PadRight(12) -NoNewline -ForegroundColor Green
@@ -276,7 +276,7 @@ function Show-Presets {
         }
     }
 
-    Write-Host "`n📖 Usage:" -ForegroundColor Cyan
+    Write-Host "`nUsage:" -ForegroundColor Cyan
     Write-Host "  preset <name>              Use with clipboard content"
     Write-Host "  preset <name> <file>       Use with file content"
     Write-Host "  git diff | preset review   Pipe input"
@@ -295,43 +295,45 @@ function Invoke-Preset {
     $p = $Presets[$PresetName]
     $fullPrompt = "$($p.prompt)`n`n$Input"
 
-    Write-Host "`n▶ $($p.name)" -ForegroundColor Cyan
+    Write-Host "`n[>] $($p.name)" -ForegroundColor Cyan
 
     # Route to appropriate AI
     $scriptDir = $PSScriptRoot
     & "$scriptDir\ai.ps1" $p.ai $fullPrompt
 }
 
-# Main
-if (-not $Preset -or $Preset -in @("help", "-h", "--help", "list")) {
-    Show-Presets
-    exit
-}
-
-# Get input
-$inputContent = ""
-
-# Check for piped input
-if ($input) {
-    $inputContent = $input | Out-String
-}
-
-# Check for file argument
-if ($Target -and (Test-Path $Target)) {
-    $inputContent = Get-Content $Target -Raw
-}
-
-# Check clipboard if no other input
-if (-not $inputContent) {
-    $inputContent = Get-Clipboard
-    if ($inputContent) {
-        Write-Host "📋 Using clipboard content" -ForegroundColor DarkGray
+# Main - only run when executed directly, not when sourced
+if ($MyInvocation.InvocationName -ne '.') {
+    if (-not $Preset -or $Preset -in @("help", "-h", "--help", "list")) {
+        Show-Presets
+        exit
     }
-}
 
-if (-not $inputContent) {
-    Write-Host "No input provided. Copy code to clipboard, specify a file, or pipe input." -ForegroundColor Yellow
-    exit
-}
+    # Get input
+    $inputContent = ""
 
-Invoke-Preset -PresetName $Preset -Input $inputContent
+    # Check for piped input
+    if ($input) {
+        $inputContent = $input | Out-String
+    }
+
+    # Check for file argument
+    if ($Target -and (Test-Path $Target)) {
+        $inputContent = Get-Content $Target -Raw
+    }
+
+    # Check clipboard if no other input
+    if (-not $inputContent) {
+        $inputContent = Get-Clipboard
+        if ($inputContent) {
+            Write-Host "[Clipboard] Using clipboard content" -ForegroundColor DarkGray
+        }
+    }
+
+    if (-not $inputContent) {
+        Write-Host "No input provided. Copy code to clipboard, specify a file, or pipe input." -ForegroundColor Yellow
+        exit
+    }
+
+    Invoke-Preset -PresetName $Preset -Input $inputContent
+}
