@@ -6,8 +6,6 @@ on:
     types: [created]
   pull_request_review_comment:
     types: [created]
-  issues:
-    types: [opened, edited]
 
 permissions:
   contents: read
@@ -28,6 +26,7 @@ jobs:
       target_ai: ${{ steps.parse.outputs.target }}
       context: ${{ steps.parse.outputs.context }}
       should_respond: ${{ steps.parse.outputs.should_respond }}
+      issue_number: ${{ steps.parse.outputs.issue_number }}
     steps:
       - name: Parse AI note tags
         id: parse
@@ -39,13 +38,7 @@ jobs:
                          context.payload.review?.body || '';
 
             // AI note format: @ai:<model> <message>
-            // Examples:
-            //   @ai:claude Please review the architecture
-            //   @ai:gemini Check security implications
-            //   @ai:codex Suggest optimizations
-            //   @ai:grok Find edge cases
-
-            const tagPattern = /@ai:(claude|gemini|codex|grok|all)\b/i;
+            const tagPattern = /@ai:(claude|gemini|gpt4|codex|grok|all)\b/i;
             const match = body.match(tagPattern);
 
             if (!match) {
@@ -53,15 +46,21 @@ jobs:
               return;
             }
 
-            const target = match[1].toLowerCase();
-            const context = body.replace(tagPattern, '').trim();
+            let target = match[1].toLowerCase();
+            // Normalize codex -> gpt4
+            if (target === 'codex') target = 'gpt4';
+
+            const noteContext = body.replace(tagPattern, '').trim();
+            const issueNumber = context.payload.issue?.number ||
+                               context.payload.pull_request?.number ||
+                               context.issue?.number;
 
             core.setOutput('target', target);
-            core.setOutput('context', context);
+            core.setOutput('context', noteContext);
             core.setOutput('should_respond', 'true');
+            core.setOutput('issue_number', issueNumber);
 
             console.log(`AI note detected: @ai:${target}`);
-            console.log(`Context: ${context}`);
 
   # Claude responds to notes
   claude-respond:
@@ -69,80 +68,208 @@ jobs:
     if: needs.route-note.outputs.should_respond == 'true' && (needs.route-note.outputs.target_ai == 'claude' || needs.route-note.outputs.target_ai == 'all')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: Get conversation context
         id: context
         uses: actions/github-script@v7
         with:
           script: |
-            // Get all previous comments for context
+            const issueNumber = ${{ needs.route-note.outputs.issue_number }};
             let comments = [];
 
-            if (context.payload.issue) {
+            try {
               const result = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.payload.issue.number
+                issue_number: issueNumber,
+                per_page: 20
               });
               comments = result.data.map(c => `${c.user.login}: ${c.body}`).join('\n\n');
-            } else if (context.payload.pull_request) {
-              const result = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number
-              });
-              comments = result.data.map(c => `${c.user.login}: ${c.body}`).join('\n\n');
+            } catch (e) {
+              console.log('Error fetching comments:', e.message);
             }
 
-            core.setOutput('history', comments.substring(0, 10000)); // Limit size
+            core.setOutput('history', comments.substring(0, 8000));
 
       - name: Claude processes note
         id: response
         uses: actions/github-script@v7
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
           script: |
             const note = `${{ needs.route-note.outputs.context }}`;
             const history = `${{ steps.context.outputs.history }}`;
 
-            const response = await fetch('https://api.anthropic.com/v1/messages', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': process.env.ANTHROPIC_API_KEY,
-                'anthropic-version': '2023-06-01'
-              },
-              body: JSON.stringify({
-                model: 'claude-sonnet-4-20250514',
-                max_tokens: 1500,
-                system: `You are Claude, an AI assistant participating in a collaborative code review.
-                         Other AI models may have left notes for you. Review their input and add your perspective.
-                         If you need input from another AI, tag them with @ai:<model>.
-                         Available models: @ai:gemini, @ai:codex, @ai:grok
-                         Be concise and constructive.`,
-                messages: [{
-                  role: 'user',
-                  content: `Previous discussion:\n${history}\n\nNew note for you:\n${note}\n\nPlease respond.`
-                }]
-              })
-            });
+            if (!process.env.ANTHROPIC_API_KEY) {
+              core.setOutput('response', 'Claude API key not configured');
+              core.setOutput('success', 'false');
+              return;
+            }
 
-            const data = await response.json();
-            core.setOutput('response', data.content[0].text);
+            try {
+              const response = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'x-api-key': process.env.ANTHROPIC_API_KEY,
+                  'anthropic-version': '2023-06-01'
+                },
+                body: JSON.stringify({
+                  model: 'claude-sonnet-4-20250514',
+                  max_tokens: 1500,
+                  system: `You are Claude, an AI assistant participating in collaborative code review. Other AI models may have left notes for you. Review their input and add your perspective. If you need input from another AI, tag them: @ai:gemini @ai:gpt4 @ai:grok. Be concise and constructive.`,
+                  messages: [{
+                    role: 'user',
+                    content: `Previous discussion:\n${history}\n\nNew note for you:\n${note}\n\nPlease respond.`
+                  }]
+                })
+              });
+
+              if (!response.ok) {
+                throw new Error(`API error: ${response.status}`);
+              }
+
+              const data = await response.json();
+              if (data.content && data.content[0]) {
+                core.setOutput('response', data.content[0].text);
+                core.setOutput('success', 'true');
+              } else {
+                throw new Error('Empty response');
+              }
+            } catch (error) {
+              console.log('Claude error:', error.message);
+              core.setOutput('response', `Error: ${error.message}`);
+              core.setOutput('success', 'false');
+            }
 
       - name: Post Claude's response
+        if: steps.response.outputs.success == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const response = `${{ steps.response.outputs.response }}`;
-            const issueNumber = context.payload.issue?.number ||
-                               context.payload.pull_request?.number;
+            const issueNumber = ${{ needs.route-note.outputs.issue_number }};
+
+            const body = [
+              '### 🧠 Claude',
+              '',
+              response,
+              '',
+              '*Tag another AI: `@ai:gemini` `@ai:gpt4` `@ai:grok`*'
+            ].join('\n');
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issueNumber,
-              body: `### 🧠 Claude's Response\n\n${response}\n\n---\n*Tag another AI: @ai:gemini @ai:codex @ai:grok*`
+              body: body
+            });
+
+  # GPT-4 responds to notes
+  gpt4-respond:
+    needs: route-note
+    if: needs.route-note.outputs.should_respond == 'true' && (needs.route-note.outputs.target_ai == 'gpt4' || needs.route-note.outputs.target_ai == 'codex' || needs.route-note.outputs.target_ai == 'all')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get conversation context
+        id: context
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueNumber = ${{ needs.route-note.outputs.issue_number }};
+            let comments = [];
+
+            try {
+              const result = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                per_page: 20
+              });
+              comments = result.data.map(c => `${c.user.login}: ${c.body}`).join('\n\n');
+            } catch (e) {
+              console.log('Error fetching comments:', e.message);
+            }
+
+            core.setOutput('history', comments.substring(0, 8000));
+
+      - name: GPT-4 processes note
+        id: response
+        uses: actions/github-script@v7
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        with:
+          script: |
+            const note = `${{ needs.route-note.outputs.context }}`;
+            const history = `${{ steps.context.outputs.history }}`;
+
+            if (!process.env.OPENAI_API_KEY) {
+              core.setOutput('response', 'OpenAI API key not configured');
+              core.setOutput('success', 'false');
+              return;
+            }
+
+            try {
+              const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+                },
+                body: JSON.stringify({
+                  model: 'gpt-4o',
+                  max_tokens: 1500,
+                  messages: [
+                    {
+                      role: 'system',
+                      content: `You are GPT-4, an AI assistant specializing in code quality and best practices. You're collaborating with other AIs (Claude, Gemini, Grok) on code review. If you need another AI's input, tag them: @ai:claude @ai:gemini @ai:grok. Focus on code patterns, maintainability, and testing.`
+                    },
+                    {
+                      role: 'user',
+                      content: `Previous discussion:\n${history}\n\nNew note for you:\n${note}\n\nPlease respond.`
+                    }
+                  ]
+                })
+              });
+
+              if (!response.ok) {
+                throw new Error(`API error: ${response.status}`);
+              }
+
+              const data = await response.json();
+              if (data.choices && data.choices[0]) {
+                core.setOutput('response', data.choices[0].message.content);
+                core.setOutput('success', 'true');
+              } else {
+                throw new Error('Empty response');
+              }
+            } catch (error) {
+              console.log('GPT-4 error:', error.message);
+              core.setOutput('response', `Error: ${error.message}`);
+              core.setOutput('success', 'false');
+            }
+
+      - name: Post GPT-4's response
+        if: steps.response.outputs.success == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const response = `${{ steps.response.outputs.response }}`;
+            const issueNumber = ${{ needs.route-note.outputs.issue_number }};
+
+            const body = [
+              '### 💻 GPT-4',
+              '',
+              response,
+              '',
+              '*Tag another AI: `@ai:claude` `@ai:gemini` `@ai:grok`*'
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: body
             });
 
   # Gemini responds to notes
@@ -151,149 +278,104 @@ jobs:
     if: needs.route-note.outputs.should_respond == 'true' && (needs.route-note.outputs.target_ai == 'gemini' || needs.route-note.outputs.target_ai == 'all')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: Get conversation context
         id: context
         uses: actions/github-script@v7
         with:
           script: |
+            const issueNumber = ${{ needs.route-note.outputs.issue_number }};
             let comments = [];
-            const issueNumber = context.payload.issue?.number || context.payload.pull_request?.number;
 
-            if (issueNumber) {
+            try {
               const result = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: issueNumber
+                issue_number: issueNumber,
+                per_page: 20
               });
               comments = result.data.map(c => `${c.user.login}: ${c.body}`).join('\n\n');
+            } catch (e) {
+              console.log('Error fetching comments:', e.message);
             }
-            core.setOutput('history', comments.substring(0, 10000));
+
+            core.setOutput('history', comments.substring(0, 8000));
 
       - name: Gemini processes note
         id: response
         uses: actions/github-script@v7
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         with:
           script: |
             const note = `${{ needs.route-note.outputs.context }}`;
             const history = `${{ steps.context.outputs.history }}`;
 
-            const response = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${process.env.GOOGLE_API_KEY}`,
-              {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  systemInstruction: {
-                    parts: [{
-                      text: `You are Gemini, an AI assistant specializing in security and documentation review.
-                             You're collaborating with other AIs (Claude, Codex, Grok) on code review.
-                             If you need another AI's input, tag them: @ai:claude, @ai:codex, @ai:grok
-                             Focus on security vulnerabilities and documentation gaps.`
-                    }]
-                  },
-                  contents: [{
-                    parts: [{
-                      text: `Previous discussion:\n${history}\n\nNew note for you:\n${note}\n\nPlease respond.`
-                    }]
-                  }],
-                  generationConfig: { maxOutputTokens: 1500 }
-                })
-              }
-            );
+            if (!process.env.GOOGLE_API_KEY) {
+              core.setOutput('response', 'Google API key not configured');
+              core.setOutput('success', 'false');
+              return;
+            }
 
-            const data = await response.json();
-            core.setOutput('response', data.candidates[0].content.parts[0].text);
+            try {
+              const response = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${process.env.GOOGLE_API_KEY}`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    systemInstruction: {
+                      parts: [{
+                        text: `You are Gemini, an AI specializing in security and documentation review. You're collaborating with other AIs (Claude, GPT-4, Grok). If you need another AI's input, tag them: @ai:claude @ai:gpt4 @ai:grok. Focus on security vulnerabilities and documentation gaps.`
+                      }]
+                    },
+                    contents: [{
+                      parts: [{
+                        text: `Previous discussion:\n${history}\n\nNew note for you:\n${note}\n\nPlease respond.`
+                      }]
+                    }],
+                    generationConfig: { maxOutputTokens: 1500 }
+                  })
+                }
+              );
+
+              if (!response.ok) {
+                throw new Error(`API error: ${response.status}`);
+              }
+
+              const data = await response.json();
+              if (data.candidates && data.candidates[0]) {
+                core.setOutput('response', data.candidates[0].content.parts[0].text);
+                core.setOutput('success', 'true');
+              } else {
+                throw new Error('Empty response');
+              }
+            } catch (error) {
+              console.log('Gemini error:', error.message);
+              core.setOutput('response', `Error: ${error.message}`);
+              core.setOutput('success', 'false');
+            }
 
       - name: Post Gemini's response
+        if: steps.response.outputs.success == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const response = `${{ steps.response.outputs.response }}`;
-            const issueNumber = context.payload.issue?.number || context.payload.pull_request?.number;
+            const issueNumber = ${{ needs.route-note.outputs.issue_number }};
+
+            const body = [
+              '### 🔒 Gemini',
+              '',
+              response,
+              '',
+              '*Tag another AI: `@ai:claude` `@ai:gpt4` `@ai:grok`*'
+            ].join('\n');
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issueNumber,
-              body: `### 🔒 Gemini's Response\n\n${response}\n\n---\n*Tag another AI: @ai:claude @ai:codex @ai:grok*`
-            });
-
-  # Codex/GPT-4 responds to notes
-  codex-respond:
-    needs: route-note
-    if: needs.route-note.outputs.should_respond == 'true' && (needs.route-note.outputs.target_ai == 'codex' || needs.route-note.outputs.target_ai == 'all')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Get conversation context
-        id: context
-        uses: actions/github-script@v7
-        with:
-          script: |
-            let comments = [];
-            const issueNumber = context.payload.issue?.number || context.payload.pull_request?.number;
-
-            if (issueNumber) {
-              const result = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber
-              });
-              comments = result.data.map(c => `${c.user.login}: ${c.body}`).join('\n\n');
-            }
-            core.setOutput('history', comments.substring(0, 10000));
-
-      - name: Codex processes note
-        id: response
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const note = `${{ needs.route-note.outputs.context }}`;
-            const history = `${{ steps.context.outputs.history }}`;
-
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-              },
-              body: JSON.stringify({
-                model: 'gpt-4-turbo-preview',
-                max_tokens: 1500,
-                messages: [
-                  {
-                    role: 'system',
-                    content: `You are Codex/GPT-4, an AI assistant specializing in code quality and best practices.
-                              You're collaborating with other AIs (Claude, Gemini, Grok) on code review.
-                              If you need another AI's input, tag them: @ai:claude, @ai:gemini, @ai:grok
-                              Focus on code patterns, maintainability, and testing.`
-                  },
-                  {
-                    role: 'user',
-                    content: `Previous discussion:\n${history}\n\nNew note for you:\n${note}\n\nPlease respond.`
-                  }
-                ]
-              })
-            });
-
-            const data = await response.json();
-            core.setOutput('response', data.choices[0].message.content);
-
-      - name: Post Codex's response
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const response = `${{ steps.response.outputs.response }}`;
-            const issueNumber = context.payload.issue?.number || context.payload.pull_request?.number;
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              body: `### 💻 Codex's Response\n\n${response}\n\n---\n*Tag another AI: @ai:claude @ai:gemini @ai:grok*`
+              body: body
             });
 
   # Grok responds to notes
@@ -302,73 +384,103 @@ jobs:
     if: needs.route-note.outputs.should_respond == 'true' && (needs.route-note.outputs.target_ai == 'grok' || needs.route-note.outputs.target_ai == 'all')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
       - name: Get conversation context
         id: context
         uses: actions/github-script@v7
         with:
           script: |
+            const issueNumber = ${{ needs.route-note.outputs.issue_number }};
             let comments = [];
-            const issueNumber = context.payload.issue?.number || context.payload.pull_request?.number;
 
-            if (issueNumber) {
+            try {
               const result = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: issueNumber
+                issue_number: issueNumber,
+                per_page: 20
               });
               comments = result.data.map(c => `${c.user.login}: ${c.body}`).join('\n\n');
+            } catch (e) {
+              console.log('Error fetching comments:', e.message);
             }
-            core.setOutput('history', comments.substring(0, 10000));
+
+            core.setOutput('history', comments.substring(0, 8000));
 
       - name: Grok processes note
         id: response
         uses: actions/github-script@v7
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
         with:
           script: |
             const note = `${{ needs.route-note.outputs.context }}`;
             const history = `${{ steps.context.outputs.history }}`;
 
-            const response = await fetch('https://api.x.ai/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.XAI_API_KEY}`
-              },
-              body: JSON.stringify({
-                model: 'grok-beta',
-                max_tokens: 1500,
-                messages: [
-                  {
-                    role: 'system',
-                    content: `You are Grok, an AI that thinks differently and finds unconventional issues.
-                              You're collaborating with other AIs (Claude, Gemini, Codex) on code review.
-                              If you need another AI's input, tag them: @ai:claude, @ai:gemini, @ai:codex
-                              Focus on edge cases, creative solutions, and things others might miss.
-                              Don't be afraid to be a bit witty.`
-                  },
-                  {
-                    role: 'user',
-                    content: `Previous discussion:\n${history}\n\nNew note for you:\n${note}\n\nPlease respond.`
-                  }
-                ]
-              })
-            });
+            if (!process.env.XAI_API_KEY) {
+              core.setOutput('response', 'X.AI API key not configured');
+              core.setOutput('success', 'false');
+              return;
+            }
 
-            const data = await response.json();
-            core.setOutput('response', data.choices[0].message.content);
+            try {
+              const response = await fetch('https://api.x.ai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${process.env.XAI_API_KEY}`
+                },
+                body: JSON.stringify({
+                  model: 'grok-2-latest',
+                  max_tokens: 1500,
+                  messages: [
+                    {
+                      role: 'system',
+                      content: `You are Grok, an AI that thinks differently and finds unconventional issues. You're collaborating with other AIs (Claude, GPT-4, Gemini). If you need another AI's input, tag them: @ai:claude @ai:gpt4 @ai:gemini. Focus on edge cases, creative solutions, and things others might miss. Be slightly witty.`
+                    },
+                    {
+                      role: 'user',
+                      content: `Previous discussion:\n${history}\n\nNew note for you:\n${note}\n\nPlease respond.`
+                    }
+                  ]
+                })
+              });
+
+              if (!response.ok) {
+                throw new Error(`API error: ${response.status}`);
+              }
+
+              const data = await response.json();
+              if (data.choices && data.choices[0]) {
+                core.setOutput('response', data.choices[0].message.content);
+                core.setOutput('success', 'true');
+              } else {
+                throw new Error('Empty response');
+              }
+            } catch (error) {
+              console.log('Grok error:', error.message);
+              core.setOutput('response', `Error: ${error.message}`);
+              core.setOutput('success', 'false');
+            }
 
       - name: Post Grok's response
+        if: steps.response.outputs.success == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const response = `${{ steps.response.outputs.response }}`;
-            const issueNumber = context.payload.issue?.number || context.payload.pull_request?.number;
+            const issueNumber = ${{ needs.route-note.outputs.issue_number }};
+
+            const body = [
+              '### 🚀 Grok',
+              '',
+              response,
+              '',
+              '*Tag another AI: `@ai:claude` `@ai:gpt4` `@ai:gemini`*'
+            ].join('\n');
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issueNumber,
-              body: `### 🚀 Grok's Response\n\n${response}\n\n---\n*Tag another AI: @ai:claude @ai:gemini @ai:codex*`
+              body: body
             });
