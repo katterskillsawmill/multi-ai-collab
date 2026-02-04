@@ -29,6 +29,8 @@ jobs:
       diff: ${{ steps.diff.outputs.diff }}
       files: ${{ steps.files.outputs.files }}
       pr_number: ${{ steps.pr.outputs.number }}
+      primary_ai: ${{ steps.routing.outputs.primary }}
+      focus_area: ${{ steps.routing.outputs.focus }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,6 +67,43 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect file categories for smart routing
+        id: routing
+        run: |
+          FILES=$(cat files.txt)
+
+          # Security-related files -> prioritize Gemini
+          SECURITY_MATCH=$(echo "$FILES" | grep -iE '(auth|crypto|secret|password|token|session|login|security)' | wc -l)
+
+          # Architecture-related -> prioritize Claude
+          ARCH_MATCH=$(echo "$FILES" | grep -iE '(config|setup|docker|k8s|infra|architecture|core)' | wc -l)
+
+          # Test files -> prioritize GPT-4
+          TEST_MATCH=$(echo "$FILES" | grep -iE '(test|spec|mock|__tests__)' | wc -l)
+
+          # UI/component files -> prioritize GPT-4 + Claude
+          UI_MATCH=$(echo "$FILES" | grep -iE '(component|screen|widget|view|ui|styles)' | wc -l)
+
+          # Determine primary focus
+          if [ "$SECURITY_MATCH" -gt 0 ]; then
+            echo "primary=gemini" >> $GITHUB_OUTPUT
+            echo "focus=security" >> $GITHUB_OUTPUT
+          elif [ "$ARCH_MATCH" -gt 0 ]; then
+            echo "primary=claude" >> $GITHUB_OUTPUT
+            echo "focus=architecture" >> $GITHUB_OUTPUT
+          elif [ "$TEST_MATCH" -gt 0 ]; then
+            echo "primary=gpt4" >> $GITHUB_OUTPUT
+            echo "focus=testing" >> $GITHUB_OUTPUT
+          elif [ "$UI_MATCH" -gt 0 ]; then
+            echo "primary=gpt4" >> $GITHUB_OUTPUT
+            echo "focus=ui" >> $GITHUB_OUTPUT
+          else
+            echo "primary=all" >> $GITHUB_OUTPUT
+            echo "focus=general" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Security files: $SECURITY_MATCH, Arch files: $ARCH_MATCH, Test files: $TEST_MATCH, UI files: $UI_MATCH"
 
   # Step 2: Run AI reviews in parallel
   claude-review:
@@ -407,10 +446,19 @@ jobs:
             const statusEmoji = successCount === 4 ? '✅' : successCount > 0 ? '⚠️' : '❌';
             const hr = '—'.repeat(40);
 
+            // Smart routing info
+            const primaryAI = '${{ needs.prepare.outputs.primary_ai }}' || 'all';
+            const focusArea = '${{ needs.prepare.outputs.focus_area }}' || 'general';
+            const routingNote = primaryAI !== 'all'
+              ? `Smart routing detected **${focusArea}** changes, prioritizing **${primaryAI}** review.`
+              : '';
+
             const parts = [
               `# 🤖 Multi-AI Code Review ${statusEmoji}`,
               '',
               `This PR has been reviewed by ${successCount}/4 AI models, each with a different focus area.`,
+              routingNote ? '' : null,
+              routingNote || null,
               '',
               hr,
               '',
@@ -454,7 +502,8 @@ jobs:
               '*💬 Tag an AI to continue: `@ai:claude` `@ai:gpt4` `@ai:gemini` `@ai:grok` `@ai:all`*'
             ];
 
-            const body = parts.join('\n');
+            // Filter null entries and join
+            const body = parts.filter(p => p !== null).join('\n');
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -462,3 +511,31 @@ jobs:
               issue_number: ${{ needs.prepare.outputs.pr_number }},
               body: body
             });
+
+            // Fail-fast: Check for critical findings
+            const allReviews = [claudeReview, gpt4Review, geminiReview, grokReview].join('\n');
+            const hasCritical = /CRITICAL|🔴/i.test(allReviews);
+
+            if (hasCritical) {
+              console.log('Critical findings detected - adding label');
+
+              // Add "needs-attention" label
+              try {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: ${{ needs.prepare.outputs.pr_number }},
+                  labels: ['ai-review-critical']
+                });
+              } catch (e) {
+                console.log('Could not add label (may not exist):', e.message);
+              }
+
+              // Post a warning comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: ${{ needs.prepare.outputs.pr_number }},
+                body: '⚠️ **Critical findings detected** - Please address the issues marked with 🔴 CRITICAL before merging.'
+              });
+            }

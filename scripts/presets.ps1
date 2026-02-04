@@ -191,6 +191,49 @@ $Presets = @{
         prompt = "Comprehensive review covering: architecture (Claude), code quality (GPT-4), security (Gemini), edge cases (Grok)."
         ai = "all"
     }
+
+    # RISK ANALYSIS (Codex suggested)
+    risk = @{
+        name = "Risk Summary"
+        prompt = "Summarize risks of this change: 1) What could go wrong? 2) Severity of each risk (Critical/High/Medium/Low) 3) Top 3 mitigations. Be specific about failure scenarios."
+        ai = "all"
+    }
+
+    regression = @{
+        name = "Regression Hunt"
+        prompt = "What previously-working behavior might this change break? Consider: existing features, integrations, backwards compatibility, user expectations. List specific scenarios."
+        ai = "grok"
+    }
+
+    # TEST PLANNING
+    testplan = @{
+        name = "Test Plan Builder"
+        prompt = "Generate a concrete test plan with: 1) Test titles 2) Test data/inputs 3) Expected outcomes 4) Edge cases to cover. Format as a checklist."
+        ai = "gpt4"
+    }
+
+    # THREAT MODELING
+    threat = @{
+        name = "Threat Model"
+        prompt = "Security threat model: 1) Enumerate attack surfaces 2) List abuse cases 3) Identify trust boundaries 4) Suggest mitigations. Use STRIDE or similar framework."
+        ai = "gemini"
+    }
+
+    # COMPATIBILITY
+    compat = @{
+        name = "Compatibility Check"
+        prompt = "List possible breaking changes for: 1) Older configurations 2) Different environments (dev/staging/prod) 3) Runtime versions 4) API consumers. Include migration steps if needed."
+        ai = "claude"
+    }
+
+    # STRUCTURED OUTPUT
+    structured = @{
+        name = "Structured Review"
+        prompt = "Review and output findings in this format for each issue:
+| Severity | Area | File | Finding | Recommendation |
+Use: CRITICAL (must fix), WARNING (should fix), SUGGESTION (nice to have), INFO (note)"
+        ai = "all"
+    }
 }
 
 function Show-Presets {
@@ -198,16 +241,17 @@ function Show-Presets {
     Write-Host ("=" * 50) -ForegroundColor DarkGray
 
     $categories = @{
-        "CODE REVIEW" = @("review", "quick")
+        "CODE REVIEW" = @("review", "quick", "structured")
         "ARCHITECTURE" = @("arch", "design")
-        "SECURITY" = @("security", "secrets")
-        "TESTING" = @("test", "testcases")
+        "SECURITY" = @("security", "secrets", "threat")
+        "TESTING" = @("test", "testcases", "testplan")
         "DOCUMENTATION" = @("docs", "readme")
         "REFACTORING" = @("refactor", "simplify", "dry")
         "DEBUGGING" = @("debug", "trace")
         "EXPLANATION" = @("explain", "eli5")
-        "EDGE CASES" = @("edge", "break")
+        "EDGE CASES" = @("edge", "break", "regression")
         "PERFORMANCE" = @("perf")
+        "RISK ANALYSIS" = @("risk", "compat")
         "GIT/PR" = @("commit", "pr")
         "FLUTTER" = @("flutter", "riverpod")
         "MULTI-AI" = @("collab")

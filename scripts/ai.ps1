@@ -11,9 +11,14 @@
     ai notes [issue#]             - Check notes on an issue/PR
     ai post [issue#] "message"    - Post comment to issue/PR
     ai tag [issue#] claude "msg"  - Post @ai:claude tag to issue
+    ai context                    - Show current repo context
+
+    Use --context flag to auto-include repo context:
+    ai claude --context "Review this"
 
 .EXAMPLE
     ai claude "Review this code for architectural issues"
+    ai claude --context "What should I improve?"
     ai notes 42
     ai tag 42 gpt4 "What patterns would improve this?"
 #>
@@ -23,7 +28,9 @@ param(
     [string]$Command,
 
     [Parameter(Position=1, ValueFromRemainingArguments)]
-    [string[]]$Args
+    [string[]]$Args,
+
+    [switch]$Context
 )
 
 # Load API keys from environment or .env file
@@ -45,6 +52,67 @@ $XAI_KEY = $env:XAI_API_KEY
 function Write-AI { param($icon, $name, $color) Write-Host "`n$icon " -NoNewline; Write-Host $name -ForegroundColor $color }
 function Write-Response { param($text) Write-Host $text -ForegroundColor White }
 function Write-Err { param($msg) Write-Host "ERROR: $msg" -ForegroundColor Red }
+
+# Context Gathering
+function Get-RepoContext {
+    $context = @()
+
+    # Git status
+    $gitStatus = git status --short 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $branch = git branch --show-current 2>$null
+        $context += "BRANCH: $branch"
+
+        if ($gitStatus) {
+            $context += "CHANGED FILES:"
+            $context += $gitStatus | Select-Object -First 20
+        }
+    }
+
+    # Recent commits
+    $recentCommits = git log --oneline -5 2>$null
+    if ($LASTEXITCODE -eq 0 -and $recentCommits) {
+        $context += ""
+        $context += "RECENT COMMITS:"
+        $context += $recentCommits
+    }
+
+    # Current diff (limited)
+    $diff = git diff --stat 2>$null
+    if ($LASTEXITCODE -eq 0 -and $diff) {
+        $context += ""
+        $context += "DIFF SUMMARY:"
+        $context += $diff | Select-Object -First 15
+    }
+
+    # Check for README
+    if (Test-Path "README.md") {
+        $readme = Get-Content "README.md" -TotalCount 30 | Out-String
+        $context += ""
+        $context += "README (first 30 lines):"
+        $context += $readme
+    }
+
+    # Check for package.json or pubspec.yaml
+    if (Test-Path "package.json") {
+        $pkg = Get-Content "package.json" | ConvertFrom-Json
+        $context += ""
+        $context += "PROJECT: $($pkg.name) v$($pkg.version)"
+    }
+    if (Test-Path "pubspec.yaml") {
+        $context += ""
+        $context += "FLUTTER PROJECT (pubspec.yaml found)"
+    }
+
+    return $context -join "`n"
+}
+
+function Show-Context {
+    Write-Host "`nREPO CONTEXT" -ForegroundColor Cyan
+    Write-Host ("=" * 50) -ForegroundColor DarkGray
+    $ctx = Get-RepoContext
+    Write-Host $ctx -ForegroundColor White
+}
 
 # API Callers
 function Invoke-Claude {
@@ -176,10 +244,10 @@ function Get-GitHubNotes {
             $body = $c.body
 
             # Highlight AI responses
-            if ($body -match "### 🧠 Claude|### 💻 GPT-4|### 🔒 Gemini|### 🚀 Grok") {
-                Write-Host "`n🤖 AI Response:" -ForegroundColor Yellow
+            if ($body -match "### .* Claude|### .* GPT-4|### .* Gemini|### .* Grok") {
+                Write-Host "`n[AI Response]" -ForegroundColor Yellow
             } else {
-                Write-Host "`n👤 $author`:" -ForegroundColor Green
+                Write-Host "`n[$author]:" -ForegroundColor Green
             }
             Write-Host $body.Substring(0, [Math]::Min(500, $body.Length))
             if ($body.Length -gt 500) { Write-Host "..." -ForegroundColor DarkGray }
@@ -193,7 +261,7 @@ function Post-GitHubComment {
     param([int]$IssueNumber, [string]$Message)
 
     if (-not $IssueNumber -or -not $Message) {
-        Write-Err "Usage: ai post <issue#> `"message`""
+        Write-Err "Usage: ai post [issue#] [message]"
         return
     }
 
@@ -214,7 +282,7 @@ function Post-AITag {
     param([int]$IssueNumber, [string]$AI, [string]$Message)
 
     if (-not $IssueNumber -or -not $AI -or -not $Message) {
-        Write-Err "Usage: ai tag <issue#> <claude|gpt4|gemini|grok|all> `"message`""
+        Write-Err "Usage: ai tag [issue#] [claude|gpt4|gemini|grok|all] [message]"
         return
     }
 
@@ -236,17 +304,22 @@ function Show-Help {
     ai grok "your question"       Ask Grok (edge cases focus)
     ai all "your question"        Ask all 4 AIs in sequence
 
+  WITH CONTEXT (auto-includes repo info):
+    ai claude -Context "review"   Include git status, diff, README
+    ai context                    Show current repo context
+
   PIPE INPUT:
     cat file.py | ai claude "review this"
     git diff | ai gpt4 "check for bugs"
 
   GITHUB INTEGRATION:
     ai notes [issue#]             Show recent comments (last 5)
-    ai post <issue#> "message"    Post a comment
-    ai tag <issue#> claude "msg"  Post @ai:claude tag to trigger workflow
+    ai post [issue#] "message"    Post a comment
+    ai tag [issue#] claude "msg"  Post @ai:claude tag to trigger workflow
 
   EXAMPLES:
     ai claude "What's the best architecture for a chat app?"
+    ai claude -Context "What should I focus on?"
     ai notes 42
     ai tag 42 gemini "Check this for security issues"
     git diff HEAD~1 | ai all "Review these changes"
@@ -264,6 +337,9 @@ function Show-Help {
 # Main logic
 $prompt = $Args -join " "
 
+# Filter out -Context from args if present inline
+$prompt = $prompt -replace '-Context\s*', ''
+
 # Check for piped input
 if (-not [Console]::IsInputRedirected -eq $false) {
     $pipedInput = $input | Out-String
@@ -272,19 +348,29 @@ if (-not [Console]::IsInputRedirected -eq $false) {
     }
 }
 
+# Add repo context if -Context flag is set
+if ($Context) {
+    Write-Host "[+] Including repo context..." -ForegroundColor DarkGray
+    $repoContext = Get-RepoContext
+    $prompt = "REPO CONTEXT:`n$repoContext`n`nQUESTION/TASK:`n$prompt"
+}
+
 switch ($Command.ToLower()) {
+    "context" {
+        Show-Context
+    }
     "claude" {
-        Write-AI "🧠" "Claude" "Magenta"
+        Write-AI "brain" "Claude" "Magenta"
         $result = Invoke-Claude -Prompt $prompt
         if ($result) { Write-Response $result }
     }
     "gpt4" {
-        Write-AI "💻" "GPT-4" "Green"
+        Write-AI "computer" "GPT-4" "Green"
         $result = Invoke-GPT4 -Prompt $prompt
         if ($result) { Write-Response $result }
     }
     "gemini" {
-        Write-AI "🔒" "Gemini" "Blue"
+        Write-AI "lock" "Gemini" "Blue"
         $result = Invoke-Gemini -Prompt $prompt
         if ($result) { Write-Response $result }
     }
