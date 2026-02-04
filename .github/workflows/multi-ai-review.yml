@@ -49,11 +49,12 @@ jobs:
         id: diff
         run: |
           gh pr diff ${{ steps.pr.outputs.number }} > diff.txt || echo "No diff available" > diff.txt
-          # Truncate by lines (not bytes) to preserve code context
-          # 2000 lines ~= 80KB for typical code
+          # Truncate by lines first (preserves code context)
           head -n 2000 diff.txt > truncated_diff.txt
+          # Also cap by bytes for minified/long-line files (100KB max)
+          head -c 102400 truncated_diff.txt > final_diff.txt
           # Base64 encode to preserve special characters
-          DIFF_CONTENT=$(cat truncated_diff.txt | base64 -w 0)
+          DIFF_CONTENT=$(cat final_diff.txt | base64 -w 0)
           echo "diff=$DIFF_CONTENT" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -141,7 +142,9 @@ jobs:
                 // Retry on 429 (rate limit) or 5xx (server errors)
                 if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
                   const retryAfter = response.headers.get('retry-after');
-                  const delay = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
+                  const parsedRetry = retryAfter ? parseInt(retryAfter) : NaN;
+                  // Fall back to exponential backoff if retry-after is HTTP-date or unparseable
+                  const delay = !isNaN(parsedRetry) ? parsedRetry * 1000 : Math.pow(2, attempt) * 1000;
                   console.log(`Rate limited (${response.status}). Retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
                   await new Promise(r => setTimeout(r, delay + Math.random() * 500)); // Add jitter
                   continue;
@@ -235,7 +238,8 @@ jobs:
                 if (response.ok) return response;
                 if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
                   const retryAfter = response.headers.get('retry-after');
-                  const delay = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
+                  const parsedRetry = retryAfter ? parseInt(retryAfter) : NaN;
+                  const delay = !isNaN(parsedRetry) ? parsedRetry * 1000 : Math.pow(2, attempt) * 1000;
                   console.log(`Rate limited (${response.status}). Retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
                   await new Promise(r => setTimeout(r, delay + Math.random() * 500));
                   continue;
@@ -329,7 +333,8 @@ jobs:
                 if (response.ok) return response;
                 if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
                   const retryAfter = response.headers.get('retry-after');
-                  const delay = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
+                  const parsedRetry = retryAfter ? parseInt(retryAfter) : NaN;
+                  const delay = !isNaN(parsedRetry) ? parsedRetry * 1000 : Math.pow(2, attempt) * 1000;
                   console.log(`Rate limited (${response.status}). Retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
                   await new Promise(r => setTimeout(r, delay + Math.random() * 500));
                   continue;
@@ -425,7 +430,8 @@ jobs:
                 if (response.ok) return response;
                 if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
                   const retryAfter = response.headers.get('retry-after') || response.headers.get('x-ratelimit-reset-requests');
-                  const delay = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
+                  const parsedRetry = retryAfter ? parseInt(retryAfter) : NaN;
+                  const delay = !isNaN(parsedRetry) ? parsedRetry * 1000 : Math.pow(2, attempt) * 1000;
                   console.log(`Rate limited (${response.status}). Retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
                   await new Promise(r => setTimeout(r, delay + Math.random() * 500));
                   continue;
