@@ -185,11 +185,91 @@ $Presets = @{
         ai = "claude"
     }
 
+    # RUFUS-SPECIFIC (The Book of Rufus Flutter App)
+    rls_audit = @{
+        name = "Supabase RLS Audit"
+        prompt = "Review Supabase RLS policies for: 1) Infinite recursion risks 2) Missing auth.uid() checks 3) Overly permissive policies 4) Security definer functions needed. Check for common RLS mistakes."
+        ai = "gemini"
+    }
+
+    todo_scan = @{
+        name = "TODO Scanner"
+        prompt = "Find all TODOs, FIXMEs, and incomplete stubs in this code. For each: 1) File and line 2) What's incomplete 3) Priority (P0-P3) 4) Estimated effort. Match against project phases if mentioned."
+        ai = "gpt4"
+    }
+
+    asset_check = @{
+        name = "Asset Audit"
+        prompt = "Find all referenced image/audio/Rive asset paths in this code. List: 1) Asset path 2) Where it's used 3) Whether file likely exists (based on naming). Flag any hardcoded paths that look like placeholders."
+        ai = "gpt4"
+    }
+
+    phase_review = @{
+        name = "Phase Progress"
+        prompt = "Analyze this code against typical Flutter app phases: Auth, Core Features, Progression/Gamification, Social, Polish. What phase is this code in? What's complete vs stub? What's blocking MVP?"
+        ai = "claude"
+    }
+
+    freezed_check = @{
+        name = "Freezed Models"
+        prompt = "Review Freezed model usage: 1) Is copyWith() used correctly? 2) Are all fields in fromJson/toJson? 3) Immutability violations? 4) Missing @Default annotations? 5) Entity/Model mapping issues?"
+        ai = "gemini"
+    }
+
+    supabase = @{
+        name = "Supabase Review"
+        prompt = "Review Supabase usage: 1) Query efficiency (N+1 problems) 2) RLS implications 3) Real-time subscription cleanup 4) Error handling for network/auth failures 5) Proper use of .single() vs .maybeSingle()"
+        ai = "claude"
+    }
+
+    milo_care = @{
+        name = "Care Mechanics Review"
+        prompt = "Review virtual pet care mechanics for edge cases: 1) Stat overflow/underflow 2) Decay timing race conditions 3) Offline time handling 4) Streak manipulation exploits 5) Care tier boundary conditions"
+        ai = "grok"
+    }
+
+    provider_audit = @{
+        name = "Provider Graph Audit"
+        prompt = "Audit Riverpod provider graph: 1) Circular dependencies 2) Providers that should be family 3) Improper ref.read in build 4) Missing autoDispose 5) State that should be persisted vs ephemeral"
+        ai = "claude"
+    }
+
+    streak_check = @{
+        name = "Streak/XP Review"
+        prompt = "Review progression system for exploits: 1) Timezone manipulation 2) Double-counting XP 3) Streak freeze abuse 4) Level boundary overflow 5) Race conditions in concurrent updates"
+        ai = "grok"
+    }
+
     # MULTI-AI COLLABORATION
     collab = @{
         name = "Full AI Review"
         prompt = "Comprehensive review covering: architecture (Claude), code quality (GPT-4), security (Gemini), edge cases (Grok)."
         ai = "all"
+    }
+
+    # BRAINSTORM PRESETS (CLI-based multi-AI orchestration)
+    coderev = @{
+        name = "Multi-AI Code Review"
+        ai = "brainstorm"
+        prompt = "Perform a collaborative code review. Each AI should focus on different aspects: security, performance, maintainability. Cross-verify findings."
+    }
+
+    archrev = @{
+        name = "Architecture Review"
+        ai = "brainstorm"
+        prompt = "Review this architecture collaboratively. Discuss trade-offs, potential issues, scalability concerns, and improvements. Debate different approaches."
+    }
+
+    threatmodel = @{
+        name = "Threat Modeling Session"
+        ai = "brainstorm"
+        prompt = "Perform collaborative threat modeling. Identify attack surfaces, enumerate threats using STRIDE, and propose mitigations. Cross-verify each other's findings."
+    }
+
+    debate = @{
+        name = "AI Debate"
+        ai = "brainstorm"
+        prompt = "Debate the pros and cons of this approach. Take different perspectives and challenge assumptions. Reach a consensus on recommendations."
     }
 
     # RISK ANALYSIS (Codex suggested)
@@ -254,7 +334,11 @@ function Show-Presets {
         "RISK ANALYSIS" = @("risk", "compat")
         "GIT/PR" = @("commit", "pr")
         "FLUTTER" = @("flutter", "riverpod")
+        "RUFUS/SUPABASE" = @("rls_audit", "supabase", "freezed_check", "provider_audit")
+        "RUFUS/CARE" = @("milo_care", "streak_check", "phase_review")
+        "RUFUS/AUDIT" = @("todo_scan", "asset_check")
         "MULTI-AI" = @("collab")
+        "BRAINSTORM" = @("coderev", "archrev", "threatmodel", "debate")
     }
 
     foreach ($cat in $categories.Keys) {

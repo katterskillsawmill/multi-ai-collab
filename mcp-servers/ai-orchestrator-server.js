@@ -107,6 +107,40 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["code"]
         }
+      },
+      {
+        name: "brainstorm",
+        description: "Run a multi-AI brainstorm session via the CLI. Uses Codex, Gemini, and Claude to debate a topic across multiple rounds.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            topic: {
+              type: "string",
+              description: "The topic to brainstorm about"
+            },
+            rounds: {
+              type: "number",
+              description: "Number of debate rounds (default: 3)"
+            },
+            sequential: {
+              type: "boolean",
+              description: "Use sequential back-and-forth mode instead of parallel"
+            },
+            providers: {
+              type: "string",
+              description: "Comma-separated list of providers (default: codex,gemini,claude)"
+            }
+          },
+          required: ["topic"]
+        }
+      },
+      {
+        name: "list_presets",
+        description: "List available AI presets (specialized prompt templates for code review, threat modeling, test planning, etc.)",
+        inputSchema: {
+          type: "object",
+          properties: {}
+        }
       }
     ]
   };
@@ -120,7 +154,7 @@ async function callGemini(prompt, code) {
   const fullPrompt = code ? `${prompt}\n\nCode:\n${code}` : prompt;
 
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -148,7 +182,7 @@ async function callGPT4(prompt, code) {
       "Authorization": `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: "gpt-4-turbo-preview",
+      model: "gpt-4o",
       max_tokens: 2000,
       messages: [
         { role: "system", content: "You are an expert code reviewer." },
@@ -174,7 +208,7 @@ async function callGrok(prompt, code) {
       "Authorization": `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: "grok-beta",
+      model: "grok-2-latest",
       max_tokens: 2000,
       messages: [
         { role: "system", content: "You are Grok. Think outside the box." },
@@ -235,6 +269,31 @@ ${gpt4}
 ${grok}
 `;
         return { content: [{ type: "text", text: result }] };
+      }
+
+      case "brainstorm": {
+        const { execSync } = await import("child_process");
+        const rounds = args.rounds || 3;
+        const sequential = args.sequential ? "-Sequential" : "";
+        const providers = args.providers ? `-Providers ${args.providers}` : "";
+        const cmd = `powershell -NoProfile -Command "& '${process.env.HOME || process.env.USERPROFILE}/multi-ai-collab-fix/scripts/ai.ps1' brainstorm '${args.topic.replace(/'/g, "''")}' -Rounds ${rounds} ${sequential} ${providers}"`;
+        try {
+          const output = execSync(cmd, { timeout: 300000, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+          return { content: [{ type: "text", text: output }] };
+        } catch (e) {
+          return { content: [{ type: "text", text: `Brainstorm failed: ${e.stderr || e.message}` }], isError: true };
+        }
+      }
+
+      case "list_presets": {
+        const { execSync } = await import("child_process");
+        const cmd = `powershell -NoProfile -Command "& '${process.env.HOME || process.env.USERPROFILE}/multi-ai-collab-fix/scripts/ai.ps1' presets"`;
+        try {
+          const output = execSync(cmd, { timeout: 30000, encoding: "utf8" });
+          return { content: [{ type: "text", text: output }] };
+        } catch (e) {
+          return { content: [{ type: "text", text: `Failed to list presets: ${e.stderr || e.message}` }], isError: true };
+        }
       }
 
       default:

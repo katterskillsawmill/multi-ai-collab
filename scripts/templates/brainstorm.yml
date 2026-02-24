@@ -1,0 +1,87 @@
+# Multi-AI Brainstorming Session Template
+# Usage: orchestrate run brainstorm.yml
+
+spec:
+  # The main topic or question to brainstorm
+  topic: "Your topic here"
+
+  # AI providers to include (codex, gemini, claude, gpt4, grok)
+  providers: [codex, gemini, claude]
+
+  # Number of discussion rounds per phase
+  rounds: 2
+
+  # Execution mode: sequential (AIs respond in order) or parallel (simultaneous)
+  mode: sequential
+
+# Phases define the structure of the brainstorming session
+phases:
+  # Phase 1: Diverge - Generate diverse ideas
+  - name: diverge
+    prompt: |
+      Generate 3 novel ideas or perspectives on the topic.
+      For each idea, provide:
+      - Title: Brief descriptive name
+      - Description: 2-3 sentences explaining the idea
+      - Pros: Key benefits or strengths
+      - Cons: Potential risks or weaknesses
+      - Novelty: What makes this approach unique?
+
+      Be creative and think beyond conventional solutions.
+      Consider edge cases and unconventional approaches.
+
+  # Phase 2: Critique - Challenge and refine
+  - name: critique
+    prompt: |
+      Review the ideas generated so far.
+      For each idea from other AIs:
+      - Identify potential flaws or blind spots
+      - Suggest improvements or modifications
+      - Rate feasibility (1-10) with justification
+      - Highlight any missing considerations
+
+      Be constructively critical. Challenge assumptions.
+
+  # Phase 3: Synthesize - Merge and prioritize
+  - name: synthesize
+    prompt: |
+      Synthesize the discussion into actionable recommendations.
+      Provide:
+      1. Top 3 Recommendations (ranked by consensus strength)
+         - Recommendation title
+         - Rationale (why this emerged as top choice)
+         - Implementation approach
+         - Risk mitigation
+
+      2. Action Items
+         - Immediate next steps (this week)
+         - Short-term goals (this month)
+         - Long-term considerations
+
+      3. Open Questions
+         - Issues needing human decision
+         - Areas requiring more research
+
+# Output configuration
+output:
+  # Directory for session files
+  dir: ".ai-orchestrate"
+
+  # Output formats to generate
+  formats: [markdown, json]
+
+  # Include raw AI responses in output
+  include_raw: true
+
+# Optional: Additional context
+# context:
+#   files:
+#     - src/auth/login.js
+#     - docs/security.md
+#   github_pr: "123"
+#   custom: "Additional context text here"
+
+# Optional: Notifications
+# notifications:
+#   slack_webhook: "https://hooks.slack.com/..."
+#   on_complete: true

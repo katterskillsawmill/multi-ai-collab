@@ -2,7 +2,7 @@
   "version": "3.0.0",
   "models": {
     "claude": {
-      "name": "claude-sonnet-4-20250514",
+      "name": "claude-sonnet-4-6",
       "provider": "anthropic",
       "maxTokens": 2000,
       "role": "architecture",
@@ -13,7 +13,7 @@
       "reliability": 0.95
     },
     "codex": {
-      "name": "gpt-5.2-codex",
+      "name": "gpt-5.3-codex",
       "provider": "openai",
       "maxTokens": 2000,
       "role": "quality",

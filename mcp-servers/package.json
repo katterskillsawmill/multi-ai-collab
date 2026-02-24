@@ -1,0 +1,13 @@
+{
+  "name": "ai-orchestrator-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for multi-AI orchestration (Gemini, GPT-4, Grok, brainstorm)",
+  "type": "module",
+  "main": "ai-orchestrator-server.js",
+  "scripts": {
+    "start": "node ai-orchestrator-server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
