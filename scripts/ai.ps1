@@ -1518,6 +1518,12 @@ function Show-Help {
     ai orchestrate new <name>          Create new orchestration from template
     ai orchestrate list                List available templates
 
+  CROSS-AGENT TASK MANAGEMENT:
+    ai delegate <repo> <slug> "desc"  Create task for Codex in target repo
+    ai pickup <repo>                  List pending Codex tasks
+    ai reply <repo> <task-id>         Create reply template for Claude
+    ai status [repo]                  Show task dashboard (all repos or one)
+
   GITHUB INTEGRATION:
     ai notes [issue#]             Show recent comments (last 5)
     ai post [issue#] "message"    Post a comment
@@ -1861,6 +1867,203 @@ switch ($Command.ToLower()) {
                 if ($grok) { Write-Response $grok }
             }
         }
+    }
+    "delegate" {
+        $targetRepo = $Args[0]
+        $slug = $Args[1]
+        $desc = $Args[2]
+        if (-not $targetRepo -or -not $slug) {
+            Write-Err "Usage: ai delegate <repo> <slug> [description]"
+            Write-Err "  repos: dog-show-app, ABKC-website, abkc-show-host, abkc-academy, abkc-design-system"
+            exit 1
+        }
+        $repoMap = @{
+            "dog-show-app" = "$HOME/dog-show-app"
+            "ABKC-website" = "$HOME/ABKC-website"
+            "abkc-show-host" = "$HOME/abkc-show-host"
+            "abkc-academy" = "$HOME/abkc-academy"
+            "abkc-design-system" = "$HOME/abkc-design-system"
+        }
+        $repoPath = $repoMap[$targetRepo]
+        if (-not $repoPath -or -not (Test-Path $repoPath)) {
+            Write-Err "Unknown repo: $targetRepo"
+            exit 1
+        }
+        $taskDir = Join-Path $repoPath ".codex/tasks"
+        if (-not (Test-Path $taskDir)) {
+            New-Item -ItemType Directory -Path $taskDir -Force | Out-Null
+        }
+        $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+        $seq = (Get-ChildItem -Path $taskDir -Filter "*.md" -ErrorAction SilentlyContinue).Count + 1
+        $taskId = "TASK-$(Get-Date -Format 'yyyyMMdd')-$($seq.ToString('000'))"
+        $taskFile = Join-Path $taskDir "$ts-$slug.md"
+        $now = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+        $content = @"
+---
+id: $taskId
+created: "$now"
+author: claude
+assignee: codex
+repo: $targetRepo
+priority: P2
+type: code
+status: pending
+---
+
+# $slug
+
+## Context
+$desc
+
+## Instructions
+<!-- Step-by-step instructions for Codex -->
+
+## Acceptance Criteria
+- [ ] Tests pass
+- [ ] No lint warnings
+
+## Files to Create/Modify
+<!-- List files -->
+
+## Constraints
+<!-- What NOT to do -->
+"@
+        Set-Content -Path $taskFile -Value $content -Encoding UTF8
+        Write-Host "[DELEGATE] Task created: $taskId" -ForegroundColor Green
+        Write-Host "  File: $taskFile" -ForegroundColor Gray
+        Write-Host "  Edit the task file, then create a GitHub issue:" -ForegroundColor Gray
+        Write-Host "  gh issue create --repo katterskillsawmill/$targetRepo --label agent-task --title `"$taskId`: $slug`"" -ForegroundColor Yellow
+    }
+    "pickup" {
+        $targetRepo = $Args[0]
+        $repoMap = @{
+            "dog-show-app" = "$HOME/dog-show-app"
+            "ABKC-website" = "$HOME/ABKC-website"
+            "abkc-show-host" = "$HOME/abkc-show-host"
+            "abkc-academy" = "$HOME/abkc-academy"
+            "abkc-design-system" = "$HOME/abkc-design-system"
+        }
+        if ($targetRepo) {
+            $repos = @{ $targetRepo = $repoMap[$targetRepo] }
+        } else {
+            $repos = $repoMap
+        }
+        $found = 0
+        foreach ($name in $repos.Keys) {
+            $taskDir = Join-Path $repos[$name] ".codex/tasks"
+            if (Test-Path $taskDir) {
+                $tasks = Get-ChildItem -Path $taskDir -Filter "*.md" -ErrorAction SilentlyContinue
+                foreach ($task in $tasks) {
+                    $head = Get-Content $task.FullName -Head 15 -ErrorAction SilentlyContinue
+                    if ($head -match "status:\s*pending") {
+                        $idLine = ($head | Where-Object { $_ -match "^id:" }) -replace "id:\s*", ""
+                        $found++
+                        Write-Host "[$name] $idLine - $($task.Name)" -ForegroundColor Cyan
+                    }
+                }
+            }
+        }
+        if ($found -eq 0) {
+            Write-Host "No pending tasks found." -ForegroundColor Gray
+        } else {
+            Write-Host "`n$found pending task(s) total." -ForegroundColor Green
+        }
+    }
+    "reply" {
+        $targetRepo = $Args[0]
+        $taskId = $Args[1]
+        if (-not $targetRepo -or -not $taskId) {
+            Write-Err "Usage: ai reply <repo> <task-id>"
+            exit 1
+        }
+        $repoMap = @{
+            "dog-show-app" = "$HOME/dog-show-app"
+            "ABKC-website" = "$HOME/ABKC-website"
+            "abkc-show-host" = "$HOME/abkc-show-host"
+            "abkc-academy" = "$HOME/abkc-academy"
+            "abkc-design-system" = "$HOME/abkc-design-system"
+        }
+        $repoPath = $repoMap[$targetRepo]
+        if (-not $repoPath) {
+            Write-Err "Unknown repo: $targetRepo"
+            exit 1
+        }
+        $replyDir = Join-Path $repoPath ".claude/replies"
+        if (-not (Test-Path $replyDir)) {
+            New-Item -ItemType Directory -Path $replyDir -Force | Out-Null
+        }
+        $replyFile = Join-Path $replyDir "$taskId-reply.md"
+        $now = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+        $content = @"
+---
+task_id: $taskId
+completed: "$now"
+author: codex
+status: completed
+tests_added: 0
+tests_passed: 0
+files_created: []
+files_modified: []
+pr_number: 0
+---
+
+# Reply: $taskId
+
+## What Was Done
+<!-- Summary of changes -->
+
+## Test Results
+<!-- Paste test output -->
+
+## Issues Encountered
+<!-- Any blockers or concerns -->
+
+## PR
+<!-- Link to PR -->
+"@
+        Set-Content -Path $replyFile -Value $content -Encoding UTF8
+        Write-Host "[REPLY] Template created: $replyFile" -ForegroundColor Green
+    }
+    "status" {
+        $targetRepo = $Args[0]
+        $repoMap = @{
+            "dog-show-app" = "$HOME/dog-show-app"
+            "ABKC-website" = "$HOME/ABKC-website"
+            "abkc-show-host" = "$HOME/abkc-show-host"
+            "abkc-academy" = "$HOME/abkc-academy"
+            "abkc-design-system" = "$HOME/abkc-design-system"
+        }
+        if ($targetRepo) {
+            $repos = @{ $targetRepo = $repoMap[$targetRepo] }
+        } else {
+            $repos = $repoMap
+        }
+        Write-Host "`n  Cross-Agent Task Dashboard" -ForegroundColor Cyan
+        Write-Host "  =========================" -ForegroundColor Cyan
+        foreach ($name in ($repos.Keys | Sort-Object)) {
+            $path = $repos[$name]
+            $taskDir = Join-Path $path ".codex/tasks"
+            $replyDir = Join-Path $path ".claude/replies"
+            $pending = 0; $inProgress = 0; $completed = 0; $replies = 0
+            if (Test-Path $taskDir) {
+                $tasks = Get-ChildItem -Path $taskDir -Filter "*.md" -ErrorAction SilentlyContinue
+                foreach ($t in $tasks) {
+                    $head = Get-Content $t.FullName -Head 15 -ErrorAction SilentlyContinue
+                    if ($head -match "status:\s*pending") { $pending++ }
+                    elseif ($head -match "status:\s*in_progress") { $inProgress++ }
+                    elseif ($head -match "status:\s*completed") { $completed++ }
+                }
+            }
+            if (Test-Path $replyDir) {
+                $replies = (Get-ChildItem -Path $replyDir -Filter "*-reply.md" -ErrorAction SilentlyContinue).Count
+            }
+            $total = $pending + $inProgress + $completed
+            if ($total -eq 0 -and $replies -eq 0 -and -not $targetRepo) { continue }
+            Write-Host "`n  $name" -ForegroundColor White
+            Write-Host "    Tasks:   $pending pending | $inProgress in-progress | $completed completed" -ForegroundColor Gray
+            Write-Host "    Replies: $replies" -ForegroundColor Gray
+        }
+        Write-Host ""
     }
     "orchestrate" {
         $orchestratePath = Join-Path $PSScriptRoot "orchestrate.ps1"
