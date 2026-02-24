@@ -30,7 +30,9 @@ param(
     [Parameter(Position=1, ValueFromRemainingArguments)]
     [string[]]$Args,
 
-    [switch]$Context
+    [switch]$Context,
+
+    [string]$Preset
 )
 
 # Load API keys from environment or .env file
@@ -47,6 +49,15 @@ $ANTHROPIC_KEY = $env:ANTHROPIC_API_KEY
 $OPENAI_KEY = $env:OPENAI_API_KEY
 $GOOGLE_KEY = $env:GOOGLE_API_KEY
 $XAI_KEY = $env:XAI_API_KEY
+
+# Save $Preset before loading presets.ps1 (its param block would overwrite it)
+$savedPreset = $Preset
+
+# Load presets (definitions and functions only)
+. (Join-Path $PSScriptRoot "presets.ps1")
+
+# Restore $Preset
+$Preset = $savedPreset
 
 # Colors
 function Write-AI { param($icon, $name, $color) Write-Host "`n$icon " -NoNewline; Write-Host $name -ForegroundColor $color }
@@ -304,13 +315,20 @@ function Show-Help {
     ai grok "your question"       Ask Grok (edge cases focus)
     ai all "your question"        Ask all 4 AIs in sequence
 
+  PRESETS (31 specialized prompts):
+    ai presets                    List all available presets
+    ai preset threat "code"       Run threat model (-> Gemini)
+    ai preset risk "changes"      Run risk analysis (-> All AIs)
+    ai preset testplan "feature"  Generate test plan (-> GPT-4)
+    ai -Preset security "code"    Alternative syntax with flag
+
   WITH CONTEXT (auto-includes repo info):
     ai claude -Context "review"   Include git status, diff, README
     ai context                    Show current repo context
 
   PIPE INPUT:
     cat file.py | ai claude "review this"
-    git diff | ai gpt4 "check for bugs"
+    git diff | ai -Preset risk    Pipe to preset
 
   GITHUB INTEGRATION:
     ai notes [issue#]             Show recent comments (last 5)
@@ -319,9 +337,9 @@ function Show-Help {
 
   EXAMPLES:
     ai claude "What's the best architecture for a chat app?"
-    ai claude -Context "What should I focus on?"
-    ai notes 42
-    ai tag 42 gemini "Check this for security issues"
+    ai preset threat "review auth module for vulnerabilities"
+    ai preset collab "full review of this PR"
+    cat auth.js | ai -Preset security
     git diff HEAD~1 | ai all "Review these changes"
 
   SETUP:
@@ -355,6 +373,64 @@ if ($Context) {
     $prompt = "REPO CONTEXT:`n$repoContext`n`nQUESTION/TASK:`n$prompt"
 }
 
+# Handle -Preset flag
+if ($Preset) {
+    if (-not $Presets[$Preset]) {
+        Write-Err "Unknown preset: $Preset"
+        Write-Host "Run 'ai presets' to see available presets" -ForegroundColor DarkGray
+        exit 1
+    }
+
+    $p = $Presets[$Preset]
+    # Use $Command and $Args as the user input when -Preset is used
+    $userInput = @($Command) + $Args | Where-Object { $_ } | ForEach-Object { $_.Trim() }
+    $userInput = $userInput -join " "
+    $fullPrompt = "$($p.prompt)`n`nCODE/CONTEXT:`n$userInput"
+
+    Write-Host "[Preset: $($p.name)] -> $($p.ai)" -ForegroundColor Cyan
+
+    switch ($p.ai) {
+        "claude" {
+            Write-AI "[C]" "Claude" "Magenta"
+            $result = Invoke-Claude -Prompt $fullPrompt
+            if ($result) { Write-Response $result }
+        }
+        "gpt4" {
+            Write-AI "[G]" "GPT-4" "Green"
+            $result = Invoke-GPT4 -Prompt $fullPrompt
+            if ($result) { Write-Response $result }
+        }
+        "gemini" {
+            Write-AI "[S]" "Gemini" "Blue"
+            $result = Invoke-Gemini -Prompt $fullPrompt
+            if ($result) { Write-Response $result }
+        }
+        "grok" {
+            Write-AI "[X]" "Grok" "Red"
+            $result = Invoke-Grok -Prompt $fullPrompt
+            if ($result) { Write-Response $result }
+        }
+        "all" {
+            Write-AI "[C]" "Claude" "Magenta"
+            $claude = Invoke-Claude -Prompt $fullPrompt
+            if ($claude) { Write-Response $claude }
+
+            Write-AI "[G]" "GPT-4" "Green"
+            $gpt4 = Invoke-GPT4 -Prompt $fullPrompt
+            if ($gpt4) { Write-Response $gpt4 }
+
+            Write-AI "[S]" "Gemini" "Blue"
+            $gemini = Invoke-Gemini -Prompt $fullPrompt
+            if ($gemini) { Write-Response $gemini }
+
+            Write-AI "[X]" "Grok" "Red"
+            $grok = Invoke-Grok -Prompt $fullPrompt
+            if ($grok) { Write-Response $grok }
+        }
+    }
+    exit 0
+}
+
 switch ($Command.ToLower()) {
     "context" {
         Show-Context
@@ -375,26 +451,26 @@ switch ($Command.ToLower()) {
         if ($result) { Write-Response $result }
     }
     "grok" {
-        Write-AI "🚀" "Grok" "Red"
+        Write-AI "[X]" "Grok" "Red"
         $result = Invoke-Grok -Prompt $prompt
         if ($result) { Write-Response $result }
     }
     "all" {
-        Write-Host "`n🤖 Asking All AIs..." -ForegroundColor Cyan
+        Write-Host "`n[*] Asking All AIs..." -ForegroundColor Cyan
 
-        Write-AI "🧠" "Claude" "Magenta"
+        Write-AI "[C]" "Claude" "Magenta"
         $claude = Invoke-Claude -Prompt $prompt
         if ($claude) { Write-Response $claude }
 
-        Write-AI "💻" "GPT-4" "Green"
+        Write-AI "[G]" "GPT-4" "Green"
         $gpt4 = Invoke-GPT4 -Prompt $prompt
         if ($gpt4) { Write-Response $gpt4 }
 
-        Write-AI "🔒" "Gemini" "Blue"
+        Write-AI "[S]" "Gemini" "Blue"
         $gemini = Invoke-Gemini -Prompt $prompt
         if ($gemini) { Write-Response $gemini }
 
-        Write-AI "🚀" "Grok" "Red"
+        Write-AI "[X]" "Grok" "Red"
         $grok = Invoke-Grok -Prompt $prompt
         if ($grok) { Write-Response $grok }
     }
@@ -412,6 +488,64 @@ switch ($Command.ToLower()) {
         $ai = $Args[1]
         $message = ($Args | Select-Object -Skip 2) -join " "
         Post-AITag -IssueNumber $issueNum -AI $ai -Message $message
+    }
+    "presets" {
+        Show-Presets
+    }
+    "preset" {
+        $presetName = $Args[0]
+        $userInput = ($Args | Select-Object -Skip 1) -join " "
+
+        if (-not $presetName -or -not $Presets[$presetName]) {
+            Write-Err "Unknown preset: $presetName"
+            Write-Host "Run 'ai presets' to see available presets" -ForegroundColor DarkGray
+            return
+        }
+
+        $p = $Presets[$presetName]
+        $fullPrompt = "$($p.prompt)`n`nCODE/CONTEXT:`n$userInput"
+
+        Write-Host "[Preset: $($p.name)] -> $($p.ai)" -ForegroundColor Cyan
+
+        switch ($p.ai) {
+            "claude" {
+                Write-AI "[C]" "Claude" "Magenta"
+                $result = Invoke-Claude -Prompt $fullPrompt
+                if ($result) { Write-Response $result }
+            }
+            "gpt4" {
+                Write-AI "[G]" "GPT-4" "Green"
+                $result = Invoke-GPT4 -Prompt $fullPrompt
+                if ($result) { Write-Response $result }
+            }
+            "gemini" {
+                Write-AI "[S]" "Gemini" "Blue"
+                $result = Invoke-Gemini -Prompt $fullPrompt
+                if ($result) { Write-Response $result }
+            }
+            "grok" {
+                Write-AI "[X]" "Grok" "Red"
+                $result = Invoke-Grok -Prompt $fullPrompt
+                if ($result) { Write-Response $result }
+            }
+            "all" {
+                Write-AI "[C]" "Claude" "Magenta"
+                $claude = Invoke-Claude -Prompt $fullPrompt
+                if ($claude) { Write-Response $claude }
+
+                Write-AI "[G]" "GPT-4" "Green"
+                $gpt4 = Invoke-GPT4 -Prompt $fullPrompt
+                if ($gpt4) { Write-Response $gpt4 }
+
+                Write-AI "[S]" "Gemini" "Blue"
+                $gemini = Invoke-Gemini -Prompt $fullPrompt
+                if ($gemini) { Write-Response $gemini }
+
+                Write-AI "[X]" "Grok" "Red"
+                $grok = Invoke-Grok -Prompt $fullPrompt
+                if ($grok) { Write-Response $grok }
+            }
+        }
     }
     { $_ -in "help", "-h", "--help", "" } {
         Show-Help

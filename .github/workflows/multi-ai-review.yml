@@ -49,10 +49,12 @@ jobs:
         id: diff
         run: |
           gh pr diff ${{ steps.pr.outputs.number }} > diff.txt || echo "No diff available" > diff.txt
-          # Truncate if too large (API limits ~100k chars)
-          head -c 80000 diff.txt > truncated_diff.txt
+          # Truncate by lines first (preserves code context)
+          head -n 2000 diff.txt > truncated_diff.txt
+          # Also cap by bytes for minified/long-line files (100KB max)
+          head -c 102400 truncated_diff.txt > final_diff.txt
           # Base64 encode to preserve special characters
-          DIFF_CONTENT=$(cat truncated_diff.txt | base64 -w 0)
+          DIFF_CONTENT=$(cat final_diff.txt | base64 -w 0)
           echo "diff=$DIFF_CONTENT" >> $GITHUB_OUTPUT
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -130,8 +132,30 @@ jobs:
               return;
             }
 
+            // Retry with exponential backoff for 429/5xx errors
+            async function fetchWithRetry(url, options, maxRetries = 3) {
+              for (let attempt = 0; attempt <= maxRetries; attempt++) {
+                const response = await fetch(url, options);
+
+                if (response.ok) return response;
+
+                // Retry on 429 (rate limit) or 5xx (server errors)
+                if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
+                  const retryAfter = response.headers.get('retry-after');
+                  const parsedRetry = retryAfter ? parseInt(retryAfter) : NaN;
+                  // Fall back to exponential backoff if retry-after is HTTP-date or unparseable
+                  const delay = !isNaN(parsedRetry) ? parsedRetry * 1000 : Math.pow(2, attempt) * 1000;
+                  console.log(`Rate limited (${response.status}). Retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
+                  await new Promise(r => setTimeout(r, delay + Math.random() * 500)); // Add jitter
+                  continue;
+                }
+
+                return response; // Return non-retryable errors
+              }
+            }
+
             try {
-              const response = await fetch('https://api.anthropic.com/v1/messages', {
+              const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -207,8 +231,25 @@ jobs:
               return;
             }
 
+            // Retry with exponential backoff for 429/5xx errors
+            async function fetchWithRetry(url, options, maxRetries = 3) {
+              for (let attempt = 0; attempt <= maxRetries; attempt++) {
+                const response = await fetch(url, options);
+                if (response.ok) return response;
+                if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
+                  const retryAfter = response.headers.get('retry-after');
+                  const parsedRetry = retryAfter ? parseInt(retryAfter) : NaN;
+                  const delay = !isNaN(parsedRetry) ? parsedRetry * 1000 : Math.pow(2, attempt) * 1000;
+                  console.log(`Rate limited (${response.status}). Retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
+                  await new Promise(r => setTimeout(r, delay + Math.random() * 500));
+                  continue;
+                }
+                return response;
+              }
+            }
+
             try {
-              const response = await fetch('https://api.openai.com/v1/chat/completions', {
+              const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -285,8 +326,25 @@ jobs:
               return;
             }
 
+            // Retry with exponential backoff for 429/5xx errors
+            async function fetchWithRetry(url, options, maxRetries = 3) {
+              for (let attempt = 0; attempt <= maxRetries; attempt++) {
+                const response = await fetch(url, options);
+                if (response.ok) return response;
+                if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
+                  const retryAfter = response.headers.get('retry-after');
+                  const parsedRetry = retryAfter ? parseInt(retryAfter) : NaN;
+                  const delay = !isNaN(parsedRetry) ? parsedRetry * 1000 : Math.pow(2, attempt) * 1000;
+                  console.log(`Rate limited (${response.status}). Retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
+                  await new Promise(r => setTimeout(r, delay + Math.random() * 500));
+                  continue;
+                }
+                return response;
+              }
+            }
+
             try {
-              const response = await fetch(
+              const response = await fetchWithRetry(
                 `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${process.env.GOOGLE_API_KEY}`,
                 {
                   method: 'POST',
@@ -365,8 +423,25 @@ jobs:
               return;
             }
 
+            // Retry with exponential backoff for 429/5xx errors
+            async function fetchWithRetry(url, options, maxRetries = 3) {
+              for (let attempt = 0; attempt <= maxRetries; attempt++) {
+                const response = await fetch(url, options);
+                if (response.ok) return response;
+                if ((response.status === 429 || response.status >= 500) && attempt < maxRetries) {
+                  const retryAfter = response.headers.get('retry-after') || response.headers.get('x-ratelimit-reset-requests');
+                  const parsedRetry = retryAfter ? parseInt(retryAfter) : NaN;
+                  const delay = !isNaN(parsedRetry) ? parsedRetry * 1000 : Math.pow(2, attempt) * 1000;
+                  console.log(`Rate limited (${response.status}). Retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
+                  await new Promise(r => setTimeout(r, delay + Math.random() * 500));
+                  continue;
+                }
+                return response;
+              }
+            }
+
             try {
-              const response = await fetch('https://api.x.ai/v1/chat/completions', {
+              const response = await fetchWithRetry('https://api.x.ai/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -453,6 +528,31 @@ jobs:
               ? `Smart routing detected **${focusArea}** changes, prioritizing **${primaryAI}** review.`
               : '';
 
+            // Triage: Extract and count findings by severity
+            const allReviewText = [claudeReview, gpt4Review, geminiReview, grokReview].join('\n');
+            const criticalCount = (allReviewText.match(/🔴|CRITICAL/gi) || []).length;
+            const warningCount = (allReviewText.match(/🟡|WARNING/gi) || []).length;
+            const suggestionCount = (allReviewText.match(/🟢|SUGGESTION/gi) || []).length;
+
+            // Build triage section
+            let triageSection = '';
+            if (criticalCount > 0 || warningCount > 0) {
+              triageSection = [
+                '## 📊 Triage Summary',
+                '',
+                '| Severity | Count | Action |',
+                '|----------|-------|--------|',
+                criticalCount > 0 ? `| 🔴 Critical | ${criticalCount} | **Must fix before merge** |` : null,
+                warningCount > 0 ? `| 🟡 Warning | ${warningCount} | Should address |` : null,
+                suggestionCount > 0 ? `| 🟢 Suggestion | ${suggestionCount} | Consider for improvement |` : null,
+                '',
+                criticalCount > 0 ? '> ⚠️ **This PR has critical issues that should be resolved before merging.**' : null,
+                '',
+                hr,
+                ''
+              ].filter(p => p !== null).join('\n');
+            }
+
             const parts = [
               `# 🤖 Multi-AI Code Review ${statusEmoji}`,
               '',
@@ -460,8 +560,9 @@ jobs:
               routingNote ? '' : null,
               routingNote || null,
               '',
-              hr,
-              '',
+              triageSection || null,
+              triageSection ? '' : hr,
+              triageSection ? '' : '',
               '## 🧠 Claude (Architecture & Design)',
               claudeReview,
               '',

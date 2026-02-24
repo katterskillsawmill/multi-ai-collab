@@ -81,7 +81,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
-                per_page: 20
+                per_page: 100
               });
               comments = result.data.map(c => `${c.user.login}: ${c.body}`).join('\n\n');
             } catch (e) {
@@ -184,7 +184,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
-                per_page: 20
+                per_page: 100
               });
               comments = result.data.map(c => `${c.user.login}: ${c.body}`).join('\n\n');
             } catch (e) {
@@ -291,7 +291,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
-                per_page: 20
+                per_page: 100
               });
               comments = result.data.map(c => `${c.user.login}: ${c.body}`).join('\n\n');
             } catch (e) {
@@ -397,7 +397,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
-                per_page: 20
+                per_page: 100
               });
               comments = result.data.map(c => `${c.user.login}: ${c.body}`).join('\n\n');
             } catch (e) {
