@@ -1,0 +1,52 @@
+# Security Review Template
+# Usage: orchestrate run security-review.yml
+
+spec:
+  topic: "Security review of [component/module name]"
+  providers: [codex, gemini, claude]
+  rounds: 2
+  mode: sequential
+
+phases:
+  - name: threat-model
+    prompt: |
+      Perform threat modeling on the code/system.
+      Identify:
+      1. Attack Vectors - How could an attacker exploit this?
+      2. Trust Boundaries - Where does trusted/untrusted data cross?
+      3. Assets at Risk - What valuable data/resources could be compromised?
+      4. Threat Actors - Who might attack and why?
+
+      Use STRIDE framework where applicable:
+      - Spoofing, Tampering, Repudiation, Information Disclosure, DoS, Elevation of Privilege
+
+  - name: vulnerability-scan
+    prompt: |
+      Identify specific vulnerabilities in the code.
+      For each vulnerability found:
+      - Type: (e.g., XSS, SQLi, IDOR, etc.)
+      - Location: File and line if possible
+      - Severity: Critical/High/Medium/Low
+      - Exploit Scenario: How it could be exploited
+      - Fix: Recommended remediation
+
+      Check for OWASP Top 10 issues.
+      Look for hardcoded secrets, insecure defaults, missing input validation.
+
+  - name: recommendations
+    prompt: |
+      Synthesize security findings into prioritized recommendations.
+      Provide:
+      1. Critical Fixes (must fix before deployment)
+      2. High Priority (fix within sprint)
+      3. Medium Priority (schedule for next cycle)
+      4. Security Hardening (nice-to-have improvements)
+
+      For each recommendation:
+      - Clear action item
+      - Code example if applicable
+      - Verification method (how to test the fix)
+
+output:
+  dir: ".ai-security-review"
+  formats: [markdown, json]

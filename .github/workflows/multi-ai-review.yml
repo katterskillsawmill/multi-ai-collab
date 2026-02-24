@@ -31,6 +31,9 @@ jobs:
       pr_number: ${{ steps.pr.outputs.number }}
       primary_ai: ${{ steps.routing.outputs.primary }}
       focus_area: ${{ steps.routing.outputs.focus }}
+      is_delta: ${{ steps.delta.outputs.is_delta }}
+      current_sha: ${{ steps.delta.outputs.current_sha }}
+      last_reviewed_sha: ${{ steps.delta.outputs.last_reviewed_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,10 +48,83 @@ jobs:
             echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check for delta review
+        id: delta
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = ${{ steps.pr.outputs.number }};
+            const currentSha = context.sha || '${{ github.event.pull_request.head.sha }}';
+            const eventName = '${{ github.event_name }}';
+            const action = '${{ github.event.action }}';
+
+            core.setOutput('current_sha', currentSha);
+
+            // Only do delta review on synchronize (PR update) events
+            if (eventName !== 'pull_request' || action !== 'synchronize') {
+              console.log('Not a synchronize event, doing full review');
+              core.setOutput('is_delta', 'false');
+              core.setOutput('last_reviewed_sha', '');
+              return;
+            }
+
+            // Find the last bot review comment with a commit SHA
+            try {
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                per_page: 100
+              });
+
+              // Look for our bot's review comment with SHA marker
+              // Format: <!-- ai-review-sha:abc123 -->
+              const botComments = comments.data.filter(c =>
+                c.body.includes('Multi-AI Code Review') &&
+                c.body.includes('<!-- ai-review-sha:')
+              );
+
+              if (botComments.length > 0) {
+                const lastReview = botComments[botComments.length - 1];
+                const shaMatch = lastReview.body.match(/<!-- ai-review-sha:([a-f0-9]+) -->/);
+
+                if (shaMatch) {
+                  const lastSha = shaMatch[1];
+                  console.log(`Found last reviewed SHA: ${lastSha}`);
+                  console.log(`Current SHA: ${currentSha}`);
+
+                  if (lastSha !== currentSha) {
+                    core.setOutput('is_delta', 'true');
+                    core.setOutput('last_reviewed_sha', lastSha);
+                    return;
+                  }
+                }
+              }
+
+              console.log('No previous review found, doing full review');
+              core.setOutput('is_delta', 'false');
+              core.setOutput('last_reviewed_sha', '');
+            } catch (error) {
+              console.log('Error checking for delta:', error.message);
+              core.setOutput('is_delta', 'false');
+              core.setOutput('last_reviewed_sha', '');
+            }
+
       - name: Get PR diff
         id: diff
         run: |
-          gh pr diff ${{ steps.pr.outputs.number }} > diff.txt || echo "No diff available" > diff.txt
+          IS_DELTA="${{ steps.delta.outputs.is_delta }}"
+          LAST_SHA="${{ steps.delta.outputs.last_reviewed_sha }}"
+
+          if [ "$IS_DELTA" = "true" ] && [ -n "$LAST_SHA" ]; then
+            echo "Getting delta diff since $LAST_SHA"
+            # Get only changes since last review
+            git diff "$LAST_SHA"..HEAD > diff.txt 2>/dev/null || gh pr diff ${{ steps.pr.outputs.number }} > diff.txt
+          else
+            echo "Getting full PR diff"
+            gh pr diff ${{ steps.pr.outputs.number }} > diff.txt || echo "No diff available" > diff.txt
+          fi
+
           # Truncate by lines first (preserves code context)
           head -n 2000 diff.txt > truncated_diff.txt
           # Also cap by bytes for minified/long-line files (100KB max)
@@ -56,6 +132,10 @@ jobs:
           # Base64 encode to preserve special characters
           DIFF_CONTENT=$(cat final_diff.txt | base64 -w 0)
           echo "diff=$DIFF_CONTENT" >> $GITHUB_OUTPUT
+
+          # Output diff stats for logging
+          LINES=$(wc -l < diff.txt)
+          echo "Diff has $LINES lines (delta=$IS_DELTA)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -124,6 +204,7 @@ jobs:
           script: |
             const diff = Buffer.from('${{ needs.prepare.outputs.diff }}', 'base64').toString('utf-8');
             const files = `${{ needs.prepare.outputs.files }}`;
+            const isDelta = '${{ needs.prepare.outputs.is_delta }}' === 'true';
 
             // Skip if no API key
             if (!process.env.ANTHROPIC_API_KEY) {
@@ -154,6 +235,11 @@ jobs:
               }
             }
 
+            // Build prompt based on delta vs full review
+            const deltaContext = isDelta
+              ? 'This is a DELTA REVIEW - only reviewing NEW changes since the last review. Focus only on the new code shown.'
+              : 'This is a full PR review.';
+
             try {
               const response = await fetchWithRetry('https://api.anthropic.com/v1/messages', {
                 method: 'POST',
@@ -167,7 +253,9 @@ jobs:
                   max_tokens: 2000,
                   messages: [{
                     role: 'user',
-                    content: `You are an expert code architect. Review this PR diff for:
+                    content: `You are an expert code architect. ${deltaContext}
+
+            Review this PR diff for:
             1. Architectural concerns and design patterns
             2. Scalability issues
             3. Security vulnerabilities
@@ -224,6 +312,7 @@ jobs:
           script: |
             const diff = Buffer.from('${{ needs.prepare.outputs.diff }}', 'base64').toString('utf-8');
             const files = `${{ needs.prepare.outputs.files }}`;
+            const isDelta = '${{ needs.prepare.outputs.is_delta }}' === 'true';
 
             if (!process.env.OPENAI_API_KEY) {
               core.setOutput('result', '⚠️ OpenAI API key not configured');
@@ -248,6 +337,10 @@ jobs:
               }
             }
 
+            const deltaContext = isDelta
+              ? 'This is a DELTA REVIEW - only reviewing NEW changes since the last review. Focus only on the new code shown.'
+              : 'This is a full PR review.';
+
             try {
               const response = await fetchWithRetry('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
@@ -263,7 +356,9 @@ jobs:
                     content: 'You are an expert code reviewer focusing on code quality, best practices, and maintainability.'
                   }, {
                     role: 'user',
-                    content: `Review this PR diff for:
+                    content: `${deltaContext}
+
+            Review this PR diff for:
             1. Code style and consistency
             2. Best practices violations
             3. Potential bugs and edge cases
@@ -319,6 +414,7 @@ jobs:
           script: |
             const diff = Buffer.from('${{ needs.prepare.outputs.diff }}', 'base64').toString('utf-8');
             const files = `${{ needs.prepare.outputs.files }}`;
+            const isDelta = '${{ needs.prepare.outputs.is_delta }}' === 'true';
 
             if (!process.env.GOOGLE_API_KEY) {
               core.setOutput('result', '⚠️ Google API key not configured');
@@ -343,6 +439,10 @@ jobs:
               }
             }
 
+            const deltaContext = isDelta
+              ? 'This is a DELTA REVIEW - only reviewing NEW changes since the last review. Focus only on the new code shown.'
+              : 'This is a full PR review.';
+
             try {
               const response = await fetchWithRetry(
                 `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${process.env.GOOGLE_API_KEY}`,
@@ -354,7 +454,9 @@ jobs:
                   body: JSON.stringify({
                     contents: [{
                       parts: [{
-                        text: `You are an expert code reviewer focusing on documentation and security. Review this PR diff for:
+                        text: `${deltaContext}
+
+            You are an expert code reviewer focusing on documentation and security. Review this PR diff for:
             1. Missing or unclear documentation
             2. Security vulnerabilities (OWASP Top 10)
             3. Input validation issues
@@ -416,6 +518,7 @@ jobs:
           script: |
             const diff = Buffer.from('${{ needs.prepare.outputs.diff }}', 'base64').toString('utf-8');
             const files = `${{ needs.prepare.outputs.files }}`;
+            const isDelta = '${{ needs.prepare.outputs.is_delta }}' === 'true';
 
             if (!process.env.XAI_API_KEY) {
               core.setOutput('result', '⚠️ X.AI API key not configured');
@@ -440,6 +543,10 @@ jobs:
               }
             }
 
+            const deltaContext = isDelta
+              ? 'This is a DELTA REVIEW - only reviewing NEW changes since the last review. Focus only on the new code shown.'
+              : 'This is a full PR review.';
+
             try {
               const response = await fetchWithRetry('https://api.x.ai/v1/chat/completions', {
                 method: 'POST',
@@ -455,7 +562,9 @@ jobs:
                     content: 'You are Grok, an AI that thinks outside the box. Look for unconventional issues others might miss. Be insightful and slightly witty.'
                   }, {
                     role: 'user',
-                    content: `Review this PR diff for:
+                    content: `${deltaContext}
+
+            Review this PR diff for:
             1. Edge cases and corner cases
             2. Unconventional attack vectors
             3. Race conditions and timing issues
@@ -511,6 +620,11 @@ jobs:
             const geminiReview = `${{ needs.gemini-review.outputs.review }}` || '_Not available_';
             const grokReview = `${{ needs.grok-review.outputs.review }}` || '_Not available_';
 
+            // Delta review info
+            const isDelta = '${{ needs.prepare.outputs.is_delta }}' === 'true';
+            const currentSha = '${{ needs.prepare.outputs.current_sha }}';
+            const lastReviewedSha = '${{ needs.prepare.outputs.last_reviewed_sha }}';
+
             // Count successful reviews
             const claudeOk = '${{ needs.claude-review.outputs.success }}' === 'true';
             const gpt4Ok = '${{ needs.gpt4-review.outputs.success }}' === 'true';
@@ -526,6 +640,11 @@ jobs:
             const focusArea = '${{ needs.prepare.outputs.focus_area }}' || 'general';
             const routingNote = primaryAI !== 'all'
               ? `Smart routing detected **${focusArea}** changes, prioritizing **${primaryAI}** review.`
+              : '';
+
+            // Delta review note
+            const deltaNote = isDelta
+              ? `> 🔄 **Delta Review**: Only reviewing changes since commit \`${lastReviewedSha.substring(0, 7)}\``
               : '';
 
             // Triage: Extract and count findings by severity
@@ -553,10 +672,21 @@ jobs:
               ].filter(p => p !== null).join('\n');
             }
 
+            // Build review title based on delta vs full
+            const reviewTitle = isDelta
+              ? `# 🔄 Delta Review ${statusEmoji}`
+              : `# 🤖 Multi-AI Code Review ${statusEmoji}`;
+
+            const reviewIntro = isDelta
+              ? `Reviewing new changes since last review (${successCount}/4 AIs).`
+              : `This PR has been reviewed by ${successCount}/4 AI models, each with a different focus area.`;
+
             const parts = [
-              `# 🤖 Multi-AI Code Review ${statusEmoji}`,
+              reviewTitle,
               '',
-              `This PR has been reviewed by ${successCount}/4 AI models, each with a different focus area.`,
+              reviewIntro,
+              deltaNote ? '' : null,
+              deltaNote || null,
               routingNote ? '' : null,
               routingNote || null,
               '',
@@ -595,12 +725,15 @@ jobs:
               'Each model brings a unique perspective. Consider all feedback but use your judgment.',
               '',
               `**Status**: ${successCount}/4 AIs responded successfully`,
+              isDelta ? `**Review type**: Delta (changes since \`${lastReviewedSha.substring(0, 7)}\`)` : '**Review type**: Full PR review',
               '',
               '</details>',
               '',
               hr,
               '',
-              '*💬 Tag an AI to continue: `@ai:claude` `@ai:gpt4` `@ai:gemini` `@ai:grok` `@ai:all`*'
+              '*💬 Tag an AI to continue: `@ai:claude` `@ai:gpt4` `@ai:gemini` `@ai:grok` `@ai:all`*',
+              '',
+              `<!-- ai-review-sha:${currentSha} -->`
             ];
 
             // Filter null entries and join

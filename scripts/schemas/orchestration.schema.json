@@ -1,0 +1,196 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ai-orchestrator/schemas/orchestration.schema.json",
+  "title": "AI Orchestration Spec",
+  "description": "Schema for Multi-AI Orchestrator YAML configuration files",
+  "type": "object",
+  "required": ["spec", "phases"],
+  "properties": {
+    "spec": {
+      "type": "object",
+      "description": "Session specification",
+      "required": ["topic", "providers"],
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "The main topic or question for the brainstorming session",
+          "minLength": 1
+        },
+        "providers": {
+          "type": "array",
+          "description": "List of AI providers to include",
+          "items": {
+            "type": "string",
+            "enum": ["codex", "gemini", "claude", "gpt4", "grok"]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "rounds": {
+          "type": "integer",
+          "description": "Number of rounds per phase",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 1
+        },
+        "mode": {
+          "type": "string",
+          "description": "Execution mode",
+          "enum": ["sequential", "parallel"],
+          "default": "sequential"
+        }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "description": "Ordered list of phases to execute",
+      "items": {
+        "type": "object",
+        "required": ["name", "prompt"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Phase identifier (e.g., 'diverge', 'converge', 'synthesize')",
+            "minLength": 1
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Instructions for AIs during this phase",
+            "minLength": 1
+          },
+          "validation": {
+            "type": "object",
+            "description": "Output validation requirements",
+            "properties": {
+              "required_fields": {
+                "type": "array",
+                "description": "Fields that must be present in structured output",
+                "items": { "type": "string" }
+              },
+              "min_length": {
+                "type": "integer",
+                "description": "Minimum response length in characters",
+                "minimum": 0
+              },
+              "format": {
+                "type": "string",
+                "description": "Expected output format",
+                "enum": ["markdown", "json", "plain"]
+              }
+            }
+          },
+          "retry": {
+            "type": "object",
+            "description": "Retry configuration for failed validations",
+            "properties": {
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5,
+                "default": 2
+              },
+              "feedback": {
+                "type": "boolean",
+                "description": "Include validation feedback in retry prompt",
+                "default": true
+              }
+            }
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "output": {
+      "type": "object",
+      "description": "Output configuration",
+      "properties": {
+        "dir": {
+          "type": "string",
+          "description": "Output directory for session files",
+          "default": ".ai-orchestrate"
+        },
+        "formats": {
+          "type": "array",
+          "description": "Output formats to generate",
+          "items": {
+            "type": "string",
+            "enum": ["markdown", "json", "html"]
+          },
+          "default": ["markdown", "json"]
+        },
+        "include_raw": {
+          "type": "boolean",
+          "description": "Include raw AI responses in output",
+          "default": true
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "description": "Additional context to inject",
+      "properties": {
+        "files": {
+          "type": "array",
+          "description": "Files to include as context",
+          "items": { "type": "string" }
+        },
+        "github_pr": {
+          "type": "string",
+          "description": "GitHub PR number or URL to fetch"
+        },
+        "github_issue": {
+          "type": "string",
+          "description": "GitHub issue number or URL to fetch"
+        },
+        "custom": {
+          "type": "string",
+          "description": "Custom context text to include"
+        }
+      }
+    },
+    "notifications": {
+      "type": "object",
+      "description": "Notification configuration",
+      "properties": {
+        "slack_webhook": {
+          "type": "string",
+          "format": "uri",
+          "description": "Slack webhook URL for notifications"
+        },
+        "discord_webhook": {
+          "type": "string",
+          "format": "uri",
+          "description": "Discord webhook URL for notifications"
+        },
+        "on_complete": {
+          "type": "boolean",
+          "description": "Send notification when session completes",
+          "default": false
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "spec": {
+        "topic": "Review authentication module security",
+        "providers": ["codex", "gemini", "claude"],
+        "rounds": 2
+      },
+      "phases": [
+        {
+          "name": "diverge",
+          "prompt": "Identify potential security vulnerabilities. Generate 3 distinct concerns."
+        },
+        {
+          "name": "synthesize",
+          "prompt": "Merge findings into prioritized recommendations with action items."
+        }
+      ],
+      "output": {
+        "dir": ".ai-orchestrate",
+        "formats": ["markdown", "json"]
+      }
+    }
+  ]
+}

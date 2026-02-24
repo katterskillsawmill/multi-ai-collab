@@ -1,0 +1,70 @@
+# Brainstorm: GitHub Integration for Multi-AI Orchestrator
+# Testing v1.0 Orchestration System
+
+spec:
+  topic: "How to integrate v1.0 Multi-AI Orchestration System with GitHub CLI (gh), GitHub Actions, and persistent notes for automated code review and PR analysis workflows"
+  providers: [codex, gemini, claude]
+  rounds: 2
+
+phases:
+  - name: diverge
+    prompt: |
+      Generate 3 innovative approaches for integrating the Multi-AI Orchestrator with GitHub workflows.
+
+      Consider these integration points:
+      1. GitHub CLI (gh) - fetching PRs, issues, diffs, posting comments
+      2. GitHub Actions - automated triggers on PR/push events
+      3. Notes/Memory - persisting session insights across runs
+
+      For each approach, provide:
+      - Title: Brief name
+      - Architecture: How components connect
+      - Trigger: What initiates the workflow
+      - Data Flow: How context moves between systems
+      - Output: Where results are stored/posted
+
+      Think about: CI/CD integration, PR review automation, issue triage, security scanning workflows.
+
+  - name: critique
+    prompt: |
+      Review the proposed GitHub integration approaches.
+
+      For each approach, evaluate:
+      - Feasibility: Can this be built with existing tools?
+      - Security: Any concerns with tokens, permissions, data exposure?
+      - Developer Experience: Is this easy to set up and use?
+      - Scalability: Will this work for large repos/teams?
+      - Cost: API calls, compute, storage implications?
+
+      Identify the strongest 2 approaches and explain why.
+      Flag any critical gaps or missing considerations.
+
+  - name: synthesize
+    prompt: |
+      Create a concrete implementation roadmap for GitHub integration.
+
+      Provide:
+      1. **Recommended Architecture**
+         - Diagram (text-based)
+         - Key components and their roles
+
+      2. **GitHub Action Workflow**
+         - YAML snippet for .github/workflows/ai-review.yml
+         - Trigger conditions
+         - Required secrets/permissions
+
+      3. **CLI Commands to Add**
+         - New commands for ai.ps1 (e.g., ai gh-review, ai gh-triage)
+         - Example usage
+
+      4. **Notes/Memory System**
+         - How to persist insights across sessions
+         - File format and location
+         - How to reference past sessions
+
+      5. **Quick Start Guide**
+         - 5 steps to get started
+
+output:
+  dir: ".ai-gh-integration"
+  formats: [markdown, json]

@@ -1,0 +1,53 @@
+# Code Review Template
+# Usage: orchestrate run code-review.yml
+
+spec:
+  topic: "Code review of [PR/commit description]"
+  providers: [codex, gemini, claude]
+  rounds: 2
+  mode: sequential
+
+phases:
+  - name: correctness
+    prompt: |
+      Review the code for correctness and bugs.
+      Check for:
+      1. Logic errors - Does the code do what it's supposed to?
+      2. Edge cases - Are boundary conditions handled?
+      3. Error handling - Are errors caught and handled appropriately?
+      4. Race conditions - Any concurrency issues?
+      5. Resource leaks - Memory, file handles, connections?
+
+      For each issue found:
+      - Describe the problem
+      - Show the problematic code
+      - Suggest a fix
+
+  - name: quality
+    prompt: |
+      Review code quality and maintainability.
+      Assess:
+      1. Readability - Is the code clear and well-organized?
+      2. Naming - Are variables/functions well-named?
+      3. Complexity - Any functions that should be split?
+      4. DRY - Any duplicated code?
+      5. Testing - Is the code testable? Missing test cases?
+      6. Documentation - Are complex parts documented?
+
+      Rate overall quality (1-10) with justification.
+
+  - name: synthesis
+    prompt: |
+      Summarize the code review.
+      Provide:
+      1. Verdict: Approve / Request Changes / Needs Discussion
+      2. Blocking Issues (must fix)
+      3. Non-blocking Suggestions (nice to have)
+      4. Highlights (good patterns to recognize)
+      5. Questions for the author
+
+      Keep feedback constructive and actionable.
+
+output:
+  dir: ".ai-code-review"
+  formats: [markdown, json]
