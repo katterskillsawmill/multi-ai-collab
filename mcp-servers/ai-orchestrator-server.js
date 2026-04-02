@@ -165,6 +165,10 @@ async function callGemini(prompt, code) {
     }
   );
 
+  if (!response.ok) {
+    throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+  }
+
   const data = await response.json();
   return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response";
 }
@@ -191,6 +195,10 @@ async function callGPT4(prompt, code) {
     })
   });
 
+  if (!response.ok) {
+    throw new Error(`GPT-4 API error: ${response.status} ${response.statusText}`);
+  }
+
   const data = await response.json();
   return data.choices?.[0]?.message?.content || "No response";
 }
@@ -216,6 +224,10 @@ async function callGrok(prompt, code) {
       ]
     })
   });
+
+  if (!response.ok) {
+    throw new Error(`Grok API error: ${response.status} ${response.statusText}`);
+  }
 
   const data = await response.json();
   return data.choices?.[0]?.message?.content || "No response";
@@ -251,12 +263,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           all: "Provide a comprehensive code review."
         };
 
-        // Run in parallel
-        const [gemini, gpt4, grok] = await Promise.all([
+        // Run in parallel; use allSettled so one failure doesn't abort the others
+        const settled = (r) => r.status === "fulfilled" ? r.value : `⚠️ Error: ${r.reason?.message}`;
+        const [geminiResult, gpt4Result, grokResult] = await Promise.allSettled([
           callGemini(`${prompts[focus]} Focus on documentation and security.`, args.code),
           callGPT4(`${prompts[focus]} Focus on code quality and best practices.`, args.code),
           callGrok(`${prompts[focus]} Find edge cases and unconventional issues.`, args.code)
         ]);
+
+        const gemini = settled(geminiResult);
+        const gpt4   = settled(gpt4Result);
+        const grok   = settled(grokResult);
 
         const result = `
 ## Gemini (Security & Docs)
@@ -276,7 +293,7 @@ ${grok}
         const rounds = args.rounds || 3;
         const sequential = args.sequential ? "-Sequential" : "";
         const providers = args.providers ? `-Providers ${args.providers}` : "";
-        const cmd = `powershell -NoProfile -Command "& '${process.env.HOME || process.env.USERPROFILE}/multi-ai-collab-fix/scripts/ai.ps1' brainstorm '${args.topic.replace(/'/g, "''")}' -Rounds ${rounds} ${sequential} ${providers}"`;
+        const cmd = `powershell -NoProfile -Command "& '${process.env.HOME || process.env.USERPROFILE}/multi-ai-collab/scripts/ai.ps1' brainstorm '${args.topic.replace(/'/g, "''")}' -Rounds ${rounds} ${sequential} ${providers}"`;
         try {
           const output = execSync(cmd, { timeout: 300000, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
           return { content: [{ type: "text", text: output }] };
@@ -287,7 +304,7 @@ ${grok}
 
       case "list_presets": {
         const { execSync } = await import("child_process");
-        const cmd = `powershell -NoProfile -Command "& '${process.env.HOME || process.env.USERPROFILE}/multi-ai-collab-fix/scripts/ai.ps1' presets"`;
+        const cmd = `powershell -NoProfile -Command "& '${process.env.HOME || process.env.USERPROFILE}/multi-ai-collab/scripts/ai.ps1' presets"`;
         try {
           const output = execSync(cmd, { timeout: 30000, encoding: "utf8" });
           return { content: [{ type: "text", text: output }] };
